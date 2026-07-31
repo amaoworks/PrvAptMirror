@@ -1,0 +1,15 @@
+.env
+.env.*
+!.env.example
+
+# Operator uploads and generated repository state
+var/incoming/*
+var/lib/aptly/*
+var/lib/gnupg/*
+var/public/*
+
+# Local tooling
+.DS_Store
+.idea/
+.vscode/
+
