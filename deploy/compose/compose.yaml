@@ -1,0 +1,52 @@
+name: prvaptmirror
+
+services:
+  repo-web:
+    build:
+      context: ../..
+      dockerfile: containers/repo-web/Dockerfile
+    image: ${REPO_WEB_IMAGE:-prvaptmirror/repo-web:local}
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    ports:
+      - "${REPO_HTTP_BIND:-127.0.0.1}:${REPO_HTTP_PORT:-8080}:8080"
+    volumes:
+      - ${REPO_RUNTIME_DIR:-../../var}/public:/srv/repository:ro
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8080/healthz | grep -qx ok"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  repoctl:
+    profiles:
+      - tools
+    build:
+      context: ../..
+      dockerfile: containers/repoctl/Dockerfile
+    image: ${REPOCTL_IMAGE:-prvaptmirror/repoctl:local}
+    network_mode: none
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      REPO_COMPONENT: ${REPO_COMPONENT:-main}
+      REPO_ARCHITECTURES: ${REPO_ARCHITECTURES:-amd64,arm64,armhf}
+      REPO_GPG_NAME: ${REPO_GPG_NAME:-PrvAptMirror Archive}
+      REPO_GPG_EMAIL: ${REPO_GPG_EMAIL:-apt@example.invalid}
+      REPO_GPG_EXPIRE: ${REPO_GPG_EXPIRE:-2y}
+    volumes:
+      - ../../config/aptly/aptly.conf:/etc/aptly.conf:ro
+      - ${REPO_RUNTIME_DIR:-../../var}/incoming:/incoming:ro
+      - ${REPO_RUNTIME_DIR:-../../var}/lib/aptly:/var/lib/aptly
+      - ${REPO_RUNTIME_DIR:-../../var}/lib/gnupg:/var/lib/prvaptmirror/gnupg
+      - ${REPO_RUNTIME_DIR:-../../var}/public:/var/public
+    tmpfs:
+      - /tmp:size=64m,mode=1777

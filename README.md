@@ -2,7 +2,7 @@
 
 PrvAptMirror 是一个容器化、带签名的 APT 软件仓库，用于发布管理员手工上传的软件包。第一版使用 `aptly`，不提供公开上传接口，也不包含软件包构建服务。
 
-当前项目处于架构骨架阶段，还不能直接运行。实现约定参见 [`docs/architecture.md`](docs/architecture.md)，分阶段计划参见 [`docs/roadmap.md`](docs/roadmap.md)。
+MVP 已进入可运行实现阶段。实现约定参见 [`docs/architecture.md`](docs/architecture.md)，部署和使用步骤参见 [`docs/operations.md`](docs/operations.md)，分阶段计划参见 [`docs/roadmap.md`](docs/roadmap.md)。
 
 ## MVP 简述
 
@@ -30,4 +30,16 @@ PrvAptMirror 是一个容器化、带签名的 APT 软件仓库，用于发布�
 ## 运行数据
 
 `var/lib/gnupg` 保存仓库签名私钥，必须进行安全备份，并且绝不能暴露给 `repo-web`。Web 容器只能以只读方式挂载 `var/public`。
+
+## 快速开始
+
+```bash
+cp .env.example .env
+./scripts/prvaptmirror build
+./scripts/prvaptmirror repoctl init
+./scripts/prvaptmirror repoctl repo create ubuntu noble
+./scripts/prvaptmirror up
+```
+
+详细的软件包上传、发布、客户端配置和回滚方法参见 [MVP 使用说明](docs/operations.md)。
 

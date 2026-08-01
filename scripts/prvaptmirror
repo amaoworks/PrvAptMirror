@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+
+set -Eeuo pipefail
+
+readonly PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+readonly COMPOSE_FILE="${PROJECT_ROOT}/deploy/compose/compose.yaml"
+
+compose() {
+    local -a options=(-f "${COMPOSE_FILE}")
+    if [[ -f "${PROJECT_ROOT}/.env" ]]; then
+        options+=(--env-file "${PROJECT_ROOT}/.env")
+    fi
+    docker compose "${options[@]}" "$@"
+}
+
+usage() {
+    cat <<'EOF'
+用法：
+  ./scripts/prvaptmirror build
+  ./scripts/prvaptmirror up
+  ./scripts/prvaptmirror down
+  ./scripts/prvaptmirror logs
+  ./scripts/prvaptmirror status
+  ./scripts/prvaptmirror repoctl <参数...>
+
+示例：
+  ./scripts/prvaptmirror repoctl init
+  ./scripts/prvaptmirror repoctl repo create ubuntu noble
+  ./scripts/prvaptmirror repoctl package add ubuntu noble /incoming/example.deb
+EOF
+}
+
+command -v docker >/dev/null 2>&1 || {
+    printf '错误：找不到 docker 命令\n' >&2
+    exit 1
+}
+docker compose version >/dev/null 2>&1 || {
+    printf '错误：当前 Docker 未安装 Compose 插件\n' >&2
+    exit 1
+}
+
+command_name="${1:-help}"
+[[ $# -eq 0 ]] || shift
+
+case "${command_name}" in
+    build)
+        compose --profile tools build repo-web repoctl "$@"
+        ;;
+    up)
+        compose up -d --build repo-web "$@"
+        ;;
+    down)
+        compose down "$@"
+        ;;
+    logs)
+        compose logs -f repo-web "$@"
+        ;;
+    status)
+        compose ps "$@"
+        ;;
+    repoctl)
+        compose run --rm repoctl "$@"
+        ;;
+    help|-h|--help)
+        usage
+        ;;
+    *)
+        usage >&2
+        printf '错误：未知命令：%s\n' "${command_name}" >&2
+        exit 1
+        ;;
+esac

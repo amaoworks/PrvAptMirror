@@ -7,9 +7,12 @@ var/incoming/*
 var/lib/aptly/*
 var/lib/gnupg/*
 var/public/*
+!var/incoming/.gitkeep
+!var/lib/aptly/.gitkeep
+!var/lib/gnupg/.gitkeep
+!var/public/.gitkeep
 
 # Local tooling
 .DS_Store
 .idea/
 .vscode/
-
