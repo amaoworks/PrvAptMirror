@@ -5,6 +5,8 @@ services:
     build:
       context: ../..
       dockerfile: containers/repo-web/Dockerfile
+      args:
+        REPO_WEB_BASE_IMAGE: ${REPO_WEB_BASE_IMAGE:-nginxinc/nginx-unprivileged:1.27-alpine}
     image: ${REPO_WEB_IMAGE:-prvaptmirror/repo-web:local}
     restart: unless-stopped
     read_only: true
@@ -31,6 +33,9 @@ services:
     build:
       context: ../..
       dockerfile: containers/repoctl/Dockerfile
+      args:
+        REPOCTL_BASE_IMAGE: ${REPOCTL_BASE_IMAGE:-debian:bookworm-slim}
+        REPOCTL_APT_MIRROR: ${REPOCTL_APT_MIRROR:-}
     image: ${REPOCTL_IMAGE:-prvaptmirror/repoctl:local}
     network_mode: none
     read_only: true

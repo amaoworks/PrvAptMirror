@@ -6,7 +6,7 @@ readonly PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly COMPOSE_FILE="${PROJECT_ROOT}/deploy/compose/compose.yaml"
 readonly TEST_ROOT="$(mktemp -d -t prvaptmirror-smoke.XXXXXXXX)"
 readonly TEST_PROJECT="prvaptmirror-smoke-$RANDOM"
-readonly TEST_PORT="${PRVAPTMIRROR_TEST_PORT:-18080}"
+readonly TEST_PORT="${PRVAPTMIRROR_TEST_PORT:-0}"
 
 compose() {
     REPO_RUNTIME_DIR="${TEST_ROOT}/var" \
@@ -19,6 +19,11 @@ compose() {
 
 cleanup() {
     compose down --remove-orphans >/dev/null 2>&1 || true
+    compose run --rm --entrypoint sh repoctl -c '
+        find /var/lib/aptly -mindepth 1 -delete
+        find /var/lib/prvaptmirror/gnupg -mindepth 1 -delete
+        find /var/public -mindepth 1 -delete
+    ' >/dev/null 2>&1 || true
     case "${TEST_ROOT}" in
         /tmp/prvaptmirror-smoke.*) rm -rf -- "${TEST_ROOT}" ;;
     esac
@@ -137,10 +142,16 @@ package_index_contains \
     1.0.0
 
 compose up -d repo-web
-curl --fail --silent --show-error "http://127.0.0.1:${TEST_PORT}/healthz" \
+published_address="$(compose port repo-web 8080)"
+published_port="${published_address##*:}"
+[[ "${published_port}" =~ ^[0-9]+$ ]] || {
+    printf '错误：无法识别测试服务端口：%s\n' "${published_address}" >&2
+    exit 1
+}
+curl --fail --silent --show-error "http://127.0.0.1:${published_port}/healthz" \
     | grep -qx ok
 curl --fail --silent --show-error \
-    "http://127.0.0.1:${TEST_PORT}/ubuntu/dists/noble/InRelease" \
+    "http://127.0.0.1:${published_port}/ubuntu/dists/noble/InRelease" \
     >/dev/null
 
 printf '端到端冒烟测试通过\n'

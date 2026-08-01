@@ -52,6 +52,7 @@ prepare_directories() {
     [[ -f "${APTLY_CONFIG}" ]] || die "找不到 Aptly 配置：${APTLY_CONFIG}"
 
     mkdir -p "${APTLY_ROOT}" "${GNUPGHOME}" "${PUBLIC_ROOT}" "${STATE_ROOT}"
+    chown -R "$(id -u):$(id -g)" "${GNUPGHOME}"
     chmod 0700 "${GNUPGHOME}"
     chmod 0755 "${APTLY_ROOT}" "${PUBLIC_ROOT}" "${STATE_ROOT}"
 }

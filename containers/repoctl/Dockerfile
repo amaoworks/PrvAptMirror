@@ -1,8 +1,14 @@
-FROM debian:bookworm-slim
+ARG REPOCTL_BASE_IMAGE=debian:bookworm-slim
+FROM ${REPOCTL_BASE_IMAGE}
 
 ARG DEBIAN_FRONTEND=noninteractive
+ARG REPOCTL_APT_MIRROR=
 
-RUN apt-get update \
+RUN if [ -n "${REPOCTL_APT_MIRROR}" ]; then \
+        sed -i "s|http://deb.debian.org|${REPOCTL_APT_MIRROR}|g" \
+            /etc/apt/sources.list.d/debian.sources; \
+    fi \
+    && apt-get update \
     && apt-get install -y --no-install-recommends \
         aptly \
         ca-certificates \

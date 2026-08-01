@@ -23,6 +23,14 @@ Web 服务默认只监听 `127.0.0.1:8080`，适合由宿主机反向代理访�
 
 ## 2. 构建镜像
 
+默认从 Docker Hub 获取基础镜像。如果服务器无法访问 Docker Hub，可以在 `.env` 中配置镜像代理：
+
+```text
+REPO_WEB_BASE_IMAGE=docker.m.daocloud.io/nginxinc/nginx-unprivileged:1.27-alpine
+REPOCTL_BASE_IMAGE=docker.m.daocloud.io/library/debian:bookworm-slim
+REPOCTL_APT_MIRROR=http://mirrors.163.com
+```
+
 ```bash
 ./scripts/prvaptmirror build
 ```
