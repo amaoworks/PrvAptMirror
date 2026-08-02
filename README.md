@@ -1,37 +1,57 @@
 # PrvAptMirror
 
-PrvAptMirror 是一个容器化、带签名的 APT 软件仓库，用于发布管理员手工上传的软件包。第一版使用 `aptly`，不提供公开上传接口，也不包含软件包构建服务。
+PrvAptMirror 是一个容器化、带签名的 APT 软件仓库，用于安全发布管理员提供的软件包。仓库引擎使用 `aptly`，公开下载服务与管理权限相互隔离。
 
-MVP 已进入可运行实现阶段。实现约定参见 [`docs/architecture.md`](docs/architecture.md)，部署和使用步骤参见 [`docs/operations.md`](docs/operations.md)，分阶段计划参见 [`docs/roadmap.md`](docs/roadmap.md)。
+第一阶段的命令行发布基础已经完成并通过端到端测试。项目当前进入**第二阶段：单管理员 Web 管理**，目标是在浏览器中提供密码登录、软件包上传、仓库管理、签名发布、快照查看和回滚能力。
 
-## MVP 简述
+架构与安全边界参见 [系统架构](docs/architecture.md)，当前阶段范围参见 [单管理员 Web 管理](docs/web-admin.md)，部署和命令行操作参见 [运维与使用说明](docs/operations.md)，后续计划参见 [实施路线](docs/roadmap.md)。
 
-管理员通过 SSH 上传 `.deb`，运行一条管理命令，系统便生成带 GPG 签名的 APT 仓库，并通过 Web 容器的内部端口交给现有反向代理对外提供服务。
+## 当前能力
+
+- 创建面向 Ubuntu、Debian、LMDE 等发行版的独立仓库；
+- 校验并导入 `amd64`、`arm64`、`armhf` 和 `all` DEB；
+- 创建不可变快照并生成 GPG 签名的 APT 元数据；
+- 原子发布新版本和回滚到旧快照；
+- 通过非特权、只读 Web 容器提供软件包下载；
+- 使用隔离的端到端测试验证签名、多架构、更新和回滚。
+
+## 当前阶段正在增加
+
+- 单管理员密码登录和安全会话；
+- 浏览器上传 DEB、预检元数据和计算 SHA-256；
+- 仓库、软件包、快照、公钥和任务状态页面；
+- 在网页执行仓库创建、导入发布和回滚；
+- 无网络 Worker、串行任务和追加式审计日志；
+- 管理入口与公开 APT 下载入口的权限隔离。
+
+当前阶段不包含多用户、注册、角色、审批流、自动下载上游软件或源码构建。
 
 ## 目录结构
 
-| 路径 | 用途 | 是否属于 MVP |
+| 路径 | 用途 | 状态 |
 | --- | --- | --- |
-| `deploy/compose/` | Docker Compose 部署入口 | 是 |
-| `containers/repoctl/` | 包含 `aptly`、GPG 和管理命令的镜像 | 是 |
-| `containers/repo-web/` | 只读的 APT 下载服务 | 是 |
-| `config/aptly/` | Aptly 默认配置与仓库策略 | 是 |
-| `config/web/` | 内部 Web 服务配置 | 是 |
-| `scripts/` | 宿主机侧的便捷命令 | 是 |
-| `docs/` | 架构、运维和路线文档 | 是 |
-| `tests/smoke/` | 发布与安装冒烟测试 | 是 |
-| `var/` | 本地运行数据，内容禁止提交 | 是 |
-| `catalog/` | 上游软件及更新规则的声明式定义 | 后续 |
-| `automation/fetch/` | GitHub、普通网站和 APT 源抓取器 | 后续 |
-| `automation/build/` | 隔离的源码到 DEB 构建流程 | 后续 |
-| `automation/publish/` | 验证和发布晋升策略 | 后续 |
-| `packaging/` | 各软件独立的 Debian 打包配方 | 后续 |
+| `deploy/compose/` | Docker Compose 部署入口 | 已实现，第二阶段将扩展 |
+| `containers/repoctl/` | Aptly、GPG 和仓库管理命令 | 已实现 |
+| `containers/repo-web/` | 只读 APT 下载服务 | 已实现 |
+| `config/aptly/` | Aptly 配置与仓库策略 | 已实现 |
+| `config/web/` | 公开下载服务配置 | 已实现 |
+| `scripts/` | 宿主机便捷命令 | 已实现 |
+| `docs/` | 架构、运维、安全和路线文档 | 持续更新 |
+| `tests/smoke/` | 发布与安装冒烟测试 | 已实现 |
+| `var/` | 本地运行数据，内容禁止提交 | 已实现 |
+| `containers/admin-web/` | 单管理员 Web 管理服务 | 第二阶段计划 |
+| `containers/repo-worker/` | 无网络的串行仓库任务 Worker | 第二阶段计划 |
+| `catalog/` | 上游软件及更新规则 | 第三阶段 |
+| `automation/fetch/` | GitHub、网站和 APT 源抓取器 | 第三阶段 |
+| `automation/build/` | 隔离的源码到 DEB 构建流程 | 第四阶段 |
+| `automation/publish/` | 验证和发布晋升策略 | 后续阶段 |
+| `packaging/` | Debian 打包配方 | 第四阶段 |
 
-## 运行数据
+## 安全边界
 
-`var/lib/gnupg` 保存仓库签名私钥，必须进行安全备份，并且绝不能暴露给 `repo-web`。Web 容器只能以只读方式挂载 `var/public`。
+`var/lib/gnupg` 保存仓库签名私钥，必须进行加密备份。公开 `repo-web` 只能只读挂载 `var/public`；第二阶段的 `admin-web` 也不能访问签名私钥、Aptly 数据库或 Docker Socket。只有无网络的 `repo-worker` 可以执行签名和发布写操作。
 
-## 快速开始
+## 基础命令
 
 ```bash
 cp .env.example .env
@@ -41,5 +61,4 @@ cp .env.example .env
 ./scripts/prvaptmirror up
 ```
 
-详细的软件包上传、发布、客户端配置和回滚方法参见 [MVP 使用说明](docs/operations.md)。
-
+Web 管理功能正在第二阶段实施。在完成前，生产管理操作继续使用 [运维与使用说明](docs/operations.md) 中的命令行流程。
