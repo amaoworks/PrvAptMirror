@@ -173,3 +173,41 @@ var/lib/gnupg
 端到端测试会在临时目录中生成两个测试 DEB，验证初始化、签名、首次发布、更新、回滚以及 Web 下载服务。
 
 第二阶段还必须增加密码登录、登录限速、会话、CSRF、上传路径穿越、超大文件、伪造 DEB、重复提交、并发任务和审计日志测试，完成标准参见 [单管理员 Web 管理](web-admin.md)。
+
+## 11. 启用管理 Web（检查点 1）
+
+检查点 1 只提供安全登录和公开仓库只读概览，不提供上传或发布写操作。管理服务使用显式 `admin` profile，不会随公开下载服务自动启动。
+
+先在 `.env` 设置浏览器实际访问的 HTTPS Origin：
+
+```text
+ADMIN_PUBLIC_ORIGIN=https://apt-admin.example.com
+ADMIN_USERNAME=admin
+ADMIN_HTTP_BIND=127.0.0.1
+ADMIN_HTTP_PORT=28081
+```
+
+生成 Argon2id 密码哈希。密码通过终端无回显输入，重定向文件中只有哈希：
+
+```bash
+umask 077
+./scripts/prvaptmirror admin hash-password \
+  > var/admin/secrets/password-hash
+sudo chown 10001:10001 var/admin/secrets/password-hash
+chmod 0400 var/admin/secrets/password-hash
+```
+
+启动并检查服务：
+
+```bash
+./scripts/prvaptmirror admin up
+./scripts/prvaptmirror admin status
+```
+
+将独立管理域名反代到 `127.0.0.1:28081`，并配置有效 TLS。应用会严格校验 `Origin` 是否等于 `ADMIN_PUBLIC_ORIGIN`。管理端不能直接暴露内部端口，也不能与匿名 APT 下载路径共用鉴权规则。
+
+当前会话存放在单个 Gunicorn 进程内存中，服务重启会使全部会话失效，这是单管理员阶段的安全默认。运行认证测试：
+
+```bash
+./scripts/prvaptmirror admin test
+```

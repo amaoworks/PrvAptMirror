@@ -55,3 +55,88 @@ services:
       - ${REPO_RUNTIME_DIR:-../../var}/public:/var/public
     tmpfs:
       - /tmp:size=64m,mode=1777
+
+  admin-web:
+    profiles:
+      - admin
+    build:
+      context: ../..
+      dockerfile: containers/admin-web/Dockerfile
+      target: runtime
+      args:
+        ADMIN_WEB_BASE_IMAGE: ${ADMIN_WEB_BASE_IMAGE:-debian:bookworm-slim}
+    image: ${ADMIN_WEB_IMAGE:-prvaptmirror/admin-web:local}
+    restart: unless-stopped
+    user: "10001:10001"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    ports:
+      - "${ADMIN_HTTP_BIND:-127.0.0.1}:${ADMIN_HTTP_PORT:-28081}:8081"
+    environment:
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PUBLIC_ORIGIN: ${ADMIN_PUBLIC_ORIGIN:-}
+      ADMIN_SESSION_TTL: ${ADMIN_SESSION_TTL:-28800}
+      ADMIN_PASSWORD_HASH_FILE: /run/secrets/admin_password_hash
+      REPOSITORY_ROOT: /srv/repository
+    secrets:
+      - source: admin_password_hash
+        target: admin_password_hash
+        uid: "10001"
+        gid: "10001"
+        mode: 0400
+    volumes:
+      - ${REPO_RUNTIME_DIR:-../../var}/public:/srv/repository:ro
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8081/healthz', timeout=2).read()"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  admin-tools:
+    profiles:
+      - tools
+    build:
+      context: ../..
+      dockerfile: containers/admin-web/Dockerfile
+      target: runtime
+      args:
+        ADMIN_WEB_BASE_IMAGE: ${ADMIN_WEB_BASE_IMAGE:-debian:bookworm-slim}
+    image: ${ADMIN_WEB_IMAGE:-prvaptmirror/admin-web:local}
+    network_mode: none
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    entrypoint: ["python3", "/app/manage.py"]
+    tmpfs:
+      - /tmp:size=8m,mode=1777
+
+  admin-web-test:
+    profiles:
+      - test
+    build:
+      context: ../..
+      dockerfile: containers/admin-web/Dockerfile
+      target: test
+      args:
+        ADMIN_WEB_BASE_IMAGE: ${ADMIN_WEB_BASE_IMAGE:-debian:bookworm-slim}
+    image: ${ADMIN_WEB_TEST_IMAGE:-prvaptmirror/admin-web:test}
+    network_mode: none
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+
+secrets:
+  admin_password_hash:
+    file: ${ADMIN_PASSWORD_HASH_FILE:-../../var/admin/secrets/password-hash}

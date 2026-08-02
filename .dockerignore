@@ -9,4 +9,5 @@ deploy
 docs
 packaging
 tests
+!containers/admin-web/tests
 *.md

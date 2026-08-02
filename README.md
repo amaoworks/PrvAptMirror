@@ -39,7 +39,7 @@ PrvAptMirror 是一个容器化、带签名的 APT 软件仓库，用于安全�
 | `docs/` | 架构、运维、安全和路线文档 | 持续更新 |
 | `tests/smoke/` | 发布与安装冒烟测试 | 已实现 |
 | `var/` | 本地运行数据，内容禁止提交 | 已实现 |
-| `containers/admin-web/` | 单管理员 Web 管理服务 | 第二阶段计划 |
+| `containers/admin-web/` | 单管理员登录与只读管理概览 | 第二阶段检查点 1 已实现 |
 | `containers/repo-worker/` | 无网络的串行仓库任务 Worker | 第二阶段计划 |
 | `catalog/` | 上游软件及更新规则 | 第三阶段 |
 | `automation/fetch/` | GitHub、网站和 APT 源抓取器 | 第三阶段 |
@@ -61,4 +61,4 @@ cp .env.example .env
 ./scripts/prvaptmirror up
 ```
 
-Web 管理功能正在第二阶段实施。在完成前，生产管理操作继续使用 [运维与使用说明](docs/operations.md) 中的命令行流程。
+第二阶段检查点 1 已实现安全登录和只读仓库概览；上传和 Worker 尚未接入。在完整写操作通过安全测试前，生产发布继续使用 [运维与使用说明](docs/operations.md) 中的命令行流程。

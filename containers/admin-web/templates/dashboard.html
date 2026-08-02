@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block title %}概览 · PrvAptMirror{% endblock %}
+{% block body %}
+<header class="site-header">
+  <a class="brand" href="/">
+    <span class="brand-mark" aria-hidden="true">A</span>
+    <span><strong>PrvAptMirror</strong><small>ARCHIVE CONTROL PLANE</small></span>
+  </a>
+  <nav aria-label="主导航">
+    <a class="is-current" href="/">概览</a>
+    <span aria-disabled="true">上传</span>
+    <span aria-disabled="true">仓库</span>
+    <span aria-disabled="true">任务</span>
+  </nav>
+  <form method="post" action="{{ url_for('logout') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button class="quiet-button" type="submit">退出 {{ data.admin_username }}</button>
+  </form>
+</header>
+
+<main class="dashboard-shell">
+  <section class="dashboard-hero">
+    <div>
+      <p class="eyebrow">PHASE II · CHECKPOINT 01</p>
+      <h1>仓库状态，<em>一眼确认。</em></h1>
+      <p>第一批管理基础已经运行：安全登录、会话保护和公开仓库只读观察。上传与发布任务将在后续检查点接入无网络 Worker。</p>
+    </div>
+    <aside class="system-card" aria-label="管理服务状态">
+      <header><span class="status-dot"></span><strong>ADMIN WEB</strong><small>ONLINE</small></header>
+      <dl>
+        <div><dt>会话</dt><dd>Server-side</dd></div>
+        <div><dt>公开仓库</dt><dd>{{ data.repository_count }} 个发行版</dd></div>
+        <div><dt>签名公钥</dt><dd class="{{ 'ok' if data.public_key_ready else 'warn' }}">{{ 'Ready' if data.public_key_ready else 'Missing' }}</dd></div>
+        <div><dt>运行时间</dt><dd>{{ data.uptime_seconds }} 秒</dd></div>
+      </dl>
+    </aside>
+  </section>
+
+  <section class="metric-band" aria-label="关键指标">
+    <article><span>01</span><strong>{{ data.repository_count }}</strong><small>已发布发行版</small></article>
+    <article><span>02</span><strong>{{ 'YES' if data.public_key_ready else 'NO' }}</strong><small>公开签名密钥</small></article>
+    <article><span>03</span><strong>LOCKED</strong><small>高权限写操作</small></article>
+    <article><span>04</span><strong>NEXT</strong><small>上传与预检</small></article>
+  </section>
+
+  <section class="content-grid">
+    <article class="repository-panel">
+      <header class="section-heading">
+        <div><p>PUBLISHED DISTRIBUTIONS</p><h2>公开仓库</h2></div>
+        <span>数据直接读取自只读的公开目录，不访问 Aptly 数据库。</span>
+      </header>
+      {% if data.repositories %}
+      <ol class="repository-list">
+        {% for repository in data.repositories %}
+        <li>
+          <span class="state-check" aria-label="已发布">✓</span>
+          <code>{{ "%02d"|format(loop.index) }}</code>
+          <span><strong>{{ repository.family }}/{{ repository.suite }}</strong><small>InRelease · {{ repository.size }} bytes</small></span>
+          <time datetime="{{ repository.updated_iso }}">{{ repository.updated_label }}</time>
+        </li>
+        {% endfor %}
+      </ol>
+      {% else %}
+      <div class="empty-state">
+        <span>00 / NO RELEASE</span>
+        <h3>还没有公开发行版。</h3>
+        <p>创建仓库并导入第一个 DEB 后，这里会显示已签名的 InRelease 状态。</p>
+      </div>
+      {% endif %}
+    </article>
+
+    <aside class="checkpoint-panel">
+      <p>IMPLEMENTATION TRACE</p>
+      <h2>第二阶段检查点</h2>
+      <ol>
+        <li class="done"><span>01</span><div><strong>认证与只读概览</strong><small>Argon2id、会话、CSRF、安全头</small></div></li>
+        <li><span>02</span><div><strong>安全上传与预检</strong><small>随机文件名、SHA-256、DEB 元数据</small></div></li>
+        <li><span>03</span><div><strong>结构化任务 Worker</strong><small>无网络、串行、高权限隔离</small></div></li>
+        <li><span>04</span><div><strong>发布与回滚</strong><small>二次确认、日志、审计</small></div></li>
+      </ol>
+    </aside>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <div><span class="brand-mark" aria-hidden="true">A</span><p>公开下载、管理控制与签名执行保持独立权限域。</p></div>
+  <span>PrvAptMirror · Phase II</span>
+</footer>
+{% endblock %}

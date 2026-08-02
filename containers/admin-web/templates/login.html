@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}登录 · PrvAptMirror{% endblock %}
+{% block body %}
+<main class="login-shell">
+  <section class="login-story" aria-labelledby="login-heading">
+    <a class="brand" href="/" aria-label="PrvAptMirror 管理台">
+      <span class="brand-mark" aria-hidden="true">A</span>
+      <span><strong>PrvAptMirror</strong><small>ARCHIVE CONTROL PLANE</small></span>
+    </a>
+
+    <div class="login-copy">
+      <p class="eyebrow">PHASE II · SINGLE ADMIN</p>
+      <h1 id="login-heading">让每一次发布，<em>都有迹可循。</em></h1>
+      <p>上传、校验、签名、快照和回滚将沿同一条受控链路执行。管理入口只创建结构化任务，高权限仓库操作保持隔离。</p>
+    </div>
+
+    <div class="security-strip" aria-label="安全约束">
+      <span><strong>01</strong> Argon2id</span>
+      <span><strong>02</strong> CSRF Guard</span>
+      <span><strong>03</strong> No Docker Socket</span>
+    </div>
+  </section>
+
+  <section class="login-panel" aria-label="管理员登录">
+    <div class="trace-card">
+      <header><span class="status-dot"></span><strong>CONTROL SESSION</strong><small>HTTPS ONLY</small></header>
+      <ol aria-hidden="true">
+        <li><span>01</span><small>browser</small><code>提交管理员凭据</code></li>
+        <li><span>02</span><small>guard</small><code>Origin · CSRF · rate limit</code></li>
+        <li><span>03</span><small>argon2</small><code>验证只读密码哈希</code></li>
+        <li><span>04</span><small>session</small><code>签发不透明安全会话</code></li>
+      </ol>
+      <footer><span>single admin</span><span>server session</span><span>audit ready</span></footer>
+    </div>
+
+    <form class="login-form" method="post" action="{{ url_for('login') }}" autocomplete="on">
+      <div class="form-heading">
+        <p>ADMIN ACCESS</p>
+        <h2>进入仓库管理台</h2>
+        <span>当前仅允许一个管理员账号登录。</span>
+      </div>
+      {% if message %}<p class="form-alert" role="alert">{{ message }}</p>{% endif %}
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label>
+        <span>管理员账号</span>
+        <input name="username" value="{{ username }}" required maxlength="64" autocomplete="username" spellcheck="false">
+      </label>
+      <label>
+        <span>密码</span>
+        <input type="password" name="password" required maxlength="1024" autocomplete="current-password">
+      </label>
+      <button class="primary-button" type="submit">
+        <span><small>SECURE ENTRY</small><strong>验证并登录</strong></span>
+        <b aria-hidden="true">→</b>
+      </button>
+    </form>
+  </section>
+</main>
+{% endblock %}

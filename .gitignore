@@ -12,6 +12,16 @@ var/public/*
 !var/lib/gnupg/.gitkeep
 !var/public/.gitkeep
 
+# Web administration state and secrets
+var/admin/uploads/*
+var/admin/jobs/*
+var/admin/audit/*
+var/admin/secrets/*
+!var/admin/uploads/.gitkeep
+!var/admin/jobs/.gitkeep
+!var/admin/audit/.gitkeep
+!var/admin/secrets/.gitkeep
+
 # Local tooling
 .DS_Store
 .idea/

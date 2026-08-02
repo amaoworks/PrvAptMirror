@@ -22,11 +22,14 @@ usage() {
   ./scripts/prvaptmirror logs
   ./scripts/prvaptmirror status
   ./scripts/prvaptmirror repoctl <参数...>
+  ./scripts/prvaptmirror admin <up|down|logs|status|hash-password|test>
 
 示例：
   ./scripts/prvaptmirror repoctl init
   ./scripts/prvaptmirror repoctl repo create ubuntu noble
   ./scripts/prvaptmirror repoctl package add ubuntu noble /incoming/example.deb
+  ./scripts/prvaptmirror admin hash-password
+  ./scripts/prvaptmirror admin up
 EOF
 }
 
@@ -44,7 +47,7 @@ command_name="${1:-help}"
 
 case "${command_name}" in
     build)
-        compose --profile tools build repo-web repoctl "$@"
+        compose --profile tools build repo-web repoctl admin-tools "$@"
         ;;
     up)
         compose up -d --build repo-web "$@"
@@ -56,10 +59,43 @@ case "${command_name}" in
         compose logs -f repo-web "$@"
         ;;
     status)
-        compose ps "$@"
+        compose --profile admin ps "$@"
         ;;
     repoctl)
         compose run --rm repoctl "$@"
+        ;;
+    admin)
+        admin_command="${1:-help}"
+        [[ $# -eq 0 ]] || shift
+        case "${admin_command}" in
+            up)
+                compose --profile admin up -d --build admin-web "$@"
+                ;;
+            down)
+                compose --profile admin stop admin-web "$@"
+                ;;
+            logs)
+                compose --profile admin logs -f admin-web "$@"
+                ;;
+            status)
+                compose --profile admin ps admin-web "$@"
+                ;;
+            hash-password)
+                compose --profile tools run --rm admin-tools hash-password "$@"
+                ;;
+            test)
+                compose --profile test build admin-web-test
+                compose --profile test run --rm admin-web-test "$@"
+                ;;
+            help|-h|--help)
+                usage
+                ;;
+            *)
+                usage >&2
+                printf '错误：未知 admin 命令：%s\n' "${admin_command}" >&2
+                exit 1
+                ;;
+        esac
         ;;
     help|-h|--help)
         usage
