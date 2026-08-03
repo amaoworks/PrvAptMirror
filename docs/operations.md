@@ -28,9 +28,7 @@ PRVAPTMIRROR_DATA_DIR=./data
 
 REPO_HTTP_BIND=127.0.0.1
 REPO_HTTP_PORT=28080
-ADMIN_HTTP_BIND=127.0.0.1
-ADMIN_HTTP_PORT=28081
-ADMIN_PUBLIC_ORIGIN=https://apt-admin.example.com
+ADMIN_PUBLIC_ORIGIN=https://apt.example.com
 
 REPO_GPG_NAME=PrvAptMirror Archive
 REPO_GPG_EMAIL=apt@example.com
@@ -70,19 +68,19 @@ REPO_GPG_EXPIRE=2y
 ./scripts/prvaptmirror setup
 ```
 
-命令会显示管理设置地址和一个 64 位十六进制一次性令牌。打开管理页面，输入令牌并创建至少 14 个字符的管理员密码。
+命令会显示形如 `https://apt.example.com/admin/setup` 的管理设置地址和一个 64 位十六进制一次性令牌。打开管理页面，输入令牌并创建至少 14 个字符的管理员密码。
 
 设置成功后：
 
 - `data/admin/auth/password-hash` 只保存 Argon2id 哈希；
 - `data/admin/auth/setup-token` 被删除；
-- `/setup` 永久关闭；
+- `/admin/setup` 永久关闭；
 - 再次执行 `./scripts/prvaptmirror setup` 只会报告首次设置已完成。
 
 令牌不会写入 `.env`、URL 或普通容器日志。管理页面必须通过 `ADMIN_PUBLIC_ORIGIN` 对应的 HTTPS 地址访问。仅在回环地址开发或 SSH 隧道测试时才可临时设置：
 
 ```dotenv
-ADMIN_PUBLIC_ORIGIN=http://127.0.0.1:28081
+ADMIN_PUBLIC_ORIGIN=http://127.0.0.1:28080
 ADMIN_ALLOW_INSECURE_ORIGIN=1
 ```
 
@@ -90,20 +88,19 @@ ADMIN_ALLOW_INSECURE_ORIGIN=1
 
 ## 5. 反向代理
 
-默认上游：
+默认只有一个上游：
 
 ```text
-公开 APT：127.0.0.1:28080
-管理页面：127.0.0.1:28081
+仓库站点与管理入口：127.0.0.1:28080
 ```
 
-公开域名和管理域名应相互独立。公开入口只允许 `GET` 和 `HEAD`；管理入口必须启用 HTTPS，并保留原始 Host、协议和客户端地址转发头。
+反向代理只需把一个 HTTPS 域名转发到该上游，并保留原始 Host、协议和客户端地址转发头。根路径提供公开使用说明，APT 文件位于 `/ubuntu`、`/debian` 和 `/lmde`，管理页面位于 `/admin/`。公开文件路径只允许 `GET` 和 `HEAD`，`/admin/` 的写请求由管理端执行认证、Origin 与 CSRF 校验。
 
 健康检查：
 
 ```text
 http://127.0.0.1:28080/healthz
-http://127.0.0.1:28081/healthz
+http://127.0.0.1:28080/admin/healthz
 ```
 
 ## 6. 生命周期命令
@@ -160,6 +157,8 @@ scp example_1.0.0_arm64.deb user@vps:/path/to/PrvAptMirror/data/incoming/
 ## 8. 配置 APT 客户端
 
 以下示例假设公开域名为 `apt.example.com`，目标仓库为 Ubuntu Noble：
+
+同样的说明已经内置到仓库首页，部署后访问 `https://apt.example.com/` 即可查看并复制。
 
 ```bash
 sudo install -d -m 0755 /etc/apt/keyrings

@@ -31,7 +31,7 @@
 - 串行后台任务、进度、结果和脱敏日志；
 - 独立 `admin-web`、无网络 `repo-worker` 和只读 `repo-web`；
 - 管理服务不挂载 Docker Socket、GPG 私钥或 Aptly 数据库；
-- 管理入口单独使用 HTTPS 域名或路由，不与公开仓库匿名路径混用。
+- 单一 HTTPS 站点提供仓库说明和下载，管理入口使用独立的 `/admin/` 认证路由。
 
 详细功能、安全约束和完成标准参见 [单管理员 Web 管理](web-admin.md)，部署体验和下一实现批次参见 [统一多容器编排与首次设置](unified-deployment.md)。
 

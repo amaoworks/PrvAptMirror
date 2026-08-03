@@ -12,7 +12,7 @@ PrvAptMirror 是一个容器化、带签名的 APT 软件仓库，用于安全�
 - 校验并导入 `amd64`、`arm64`、`armhf` 和 `all` DEB；
 - 创建不可变快照并生成 GPG 签名的 APT 元数据；
 - 原子发布新版本和回滚到旧快照；
-- 通过非特权、只读 Web 容器提供软件包下载；
+- 通过非特权、只读 Web 容器提供软件包下载、公开接入说明和单一站点入口；
 - 通过一个 Compose 项目编排 bootstrap、管理端、无网络 Worker 和公开下载服务；
 - 将全部应用状态收敛到 `.env` 指定的单一数据根目录；
 - 幂等生成目录权限、一次性设置令牌、GPG 密钥和公开密钥；
@@ -26,7 +26,7 @@ PrvAptMirror 是一个容器化、带签名的 APT 软件仓库，用于安全�
 - 仓库、软件包、快照、公钥和任务状态页面；
 - 在网页执行仓库创建、导入发布和回滚；
 - 无网络 Worker、串行任务和追加式审计日志；
-- 管理入口与公开 APT 下载入口的权限隔离。
+- 使用一个对外 Web 入口，并在内部隔离管理页面与公开 APT 下载权限。
 
 当前阶段不包含多用户、注册、角色、审批流、自动下载上游软件或源码构建。
 
@@ -53,7 +53,9 @@ PrvAptMirror 是一个容器化、带签名的 APT 软件仓库，用于安全�
 
 ## 安全边界
 
-`data/gnupg` 保存仓库签名私钥，必须进行加密备份。公开 `repo-web` 只能只读挂载 `data/public`；`admin-web` 也不能访问签名私钥、Aptly 数据库或 Docker Socket。只有无网络的 `repo-worker`/高级 `repoctl` 可以执行签名和发布写操作。
+`data/gnupg` 保存仓库签名私钥，必须进行加密备份。公开 `repo-web` 只能只读挂载 `data/public`，并把 `/admin/` 转发给内部管理服务；`admin-web` 也不能访问签名私钥、Aptly 数据库或 Docker Socket。只有无网络的 `repo-worker`/高级 `repoctl` 可以执行签名和发布写操作。
+
+浏览器只需访问 `ADMIN_PUBLIC_ORIGIN`：根路径是仓库首页和 APT 接入说明，`/admin/` 是受密码保护的管理入口，`/ubuntu`、`/debian` 和 `/lmde` 是实际软件源路径。
 
 ## 基础命令
 

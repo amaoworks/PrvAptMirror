@@ -76,6 +76,18 @@ class AdminWebTest(unittest.TestCase):
         self.assertEqual(response.headers["Location"], "/login")
         self.assertEqual(self.client.get("/api/status", base_url=ORIGIN).status_code, 303)
 
+    def test_forwarded_admin_prefix_is_used_for_urls_and_cookies(self) -> None:
+        headers = {"X-Forwarded-Prefix": "/admin"}
+        login = self.client.get("/login", base_url=ORIGIN, headers=headers)
+        self.assertEqual(login.status_code, 200)
+        self.assertIn(b'action="/admin/login"', login.data)
+        self.assertIn(b'href="/admin/"', login.data)
+        self.assertIn("Path=/admin/login", login.headers["Set-Cookie"])
+
+        dashboard = self.client.get("/", base_url=ORIGIN, headers=headers)
+        self.assertEqual(dashboard.status_code, 303)
+        self.assertEqual(dashboard.headers["Location"], "/admin/login")
+
     def test_login_rejects_missing_csrf(self) -> None:
         response = self.client.post(
             "/login",

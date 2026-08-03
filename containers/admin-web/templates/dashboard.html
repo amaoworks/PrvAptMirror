@@ -2,12 +2,12 @@
 {% block title %}概览 · PrvAptMirror{% endblock %}
 {% block body %}
 <header class="site-header">
-  <a class="brand" href="/">
+  <a class="brand" href="{{ url_for('dashboard') }}">
     <span class="brand-mark" aria-hidden="true">A</span>
     <span><strong>PrvAptMirror</strong><small>ARCHIVE CONTROL PLANE</small></span>
   </a>
   <nav aria-label="主导航">
-    <a class="is-current" href="/">概览</a>
+    <a class="is-current" href="{{ url_for('dashboard') }}">概览</a>
     <span aria-disabled="true">上传</span>
     <span aria-disabled="true">仓库</span>
     <span aria-disabled="true">任务</span>

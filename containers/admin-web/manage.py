@@ -17,8 +17,12 @@ def show_setup_token() -> int:
         print("错误：没有找到一次性设置令牌，请先启动完整服务。", file=sys.stderr)
         return 1
     public_origin = os.environ.get("ADMIN_PUBLIC_ORIGIN", "").rstrip("/")
+    path_prefix = os.environ.get("ADMIN_PATH_PREFIX", "/admin").strip()
+    if path_prefix and not path_prefix.startswith("/"):
+        path_prefix = f"/{path_prefix}"
+    path_prefix = path_prefix.rstrip("/")
     if public_origin:
-        print(f"打开 {public_origin}/setup")
+        print(f"打开 {public_origin}{path_prefix}/setup")
     print("在管理页面的首次设置表单中输入以下一次性令牌：")
     print(token)
     return 0

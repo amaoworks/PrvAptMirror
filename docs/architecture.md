@@ -14,13 +14,16 @@ bootstrap（一次性、无网络）
   ├─ 创建首次设置令牌
   └─ 初始化或复用 GPG 密钥
 
-管理员浏览器
-  │ HTTPS + 首次设置/密码登录
-  ▼
-管理反向代理
-  │
-  ▼
-admin-web ─────► 上传目录与结构化任务目录
+管理员浏览器 ──HTTPS──┐
+APT 客户端 ───HTTPS───┤
+                      ▼
+            外部反向代理 / 单一站点
+                      │
+                      ▼
+                   repo-web
+              /admin/ │  \ /ubuntu、/debian、/lmde
+                      ▼   \──► data/public（只读）
+                  admin-web ─────► 上传目录与结构化任务目录
                            │
                            ▼
                     repo-worker
@@ -31,12 +34,9 @@ admin-web ─────► 上传目录与结构化任务目录
                       │
                       ▼
                   data/public
-                      │ 只读
-                      ▼
-APT 客户端 ─HTTPS─► 公开反向代理 ─► repo-web
 ```
 
-外部 DNS、TLS 证书和反向代理由宿主机负责。公开仓库与管理入口应使用不同域名或清晰隔离的路由；公开仓库继续保持匿名只读，管理入口的所有路径都必须先通过身份认证。
+外部 DNS、TLS 证书和反向代理由宿主机负责。项目默认只提供一个对外站点：`/` 是公开仓库首页和使用说明，`/admin/` 转发到管理服务，发行版目录保持匿名只读。管理路由的所有页面与状态变更仍必须通过身份认证、Origin 和 CSRF 校验。
 
 全部应用持久化目录从 `.env` 中的 `PRVAPTMIRROR_DATA_DIR` 派生。项目不向其他宿主机系统目录写应用状态；Docker Engine 自身的镜像和容器元数据以及外部反向代理配置不属于该数据根目录。
 
@@ -80,7 +80,7 @@ repoctl key export
 
 ### `repo-web`
 
-`repo-web` 是非特权静态文件容器，只读挂载数据根目录中的 `public` 并向公开反向代理提供内部 HTTP 端口。它没有上传接口、管理 API、任务目录、Aptly 数据库或签名私钥。
+`repo-web` 是唯一对外 Web 网关和非特权静态文件容器。它展示仓库首页与客户端接入说明，只读挂载数据根目录中的 `public`，并把 `/admin/` 反向转发到内部 `admin-web`。它自身没有上传接口、管理 API、任务目录、Aptly 数据库或签名私钥。
 
 ## 持久化数据
 
@@ -139,7 +139,7 @@ deb [signed-by=/etc/apt/keyrings/prvaptmirror.gpg] https://apt.example.com/lmde 
 
 ## 安全规则
 
-- 公开仓库只允许 `GET` 和 `HEAD`，不提供匿名上传或管理 API；
+- 首页与公开仓库路径只允许 `GET` 和 `HEAD`，不提供匿名上传或管理 API；
 - 管理入口必须使用 HTTPS、密码认证、安全会话、CSRF 防护和登录限速；
 - 明文密码、会话密钥和签名私钥不得进入 Git、镜像、环境变量或日志；
 - `.env` 只保存路径、端口、Origin、签名身份和生成策略，不直接保存任何秘密；

@@ -58,6 +58,8 @@ services:
     depends_on:
       bootstrap:
         condition: service_completed_successfully
+      admin-web:
+        condition: service_started
     restart: unless-stopped
     read_only: true
     security_opt:
@@ -95,11 +97,12 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    ports:
-      - "${ADMIN_HTTP_BIND:-127.0.0.1}:${ADMIN_HTTP_PORT:-28081}:8081"
+    expose:
+      - "8081"
     environment:
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
       ADMIN_PUBLIC_ORIGIN: ${ADMIN_PUBLIC_ORIGIN:-}
+      ADMIN_PATH_PREFIX: /admin
       ADMIN_ALLOW_INSECURE_ORIGIN: ${ADMIN_ALLOW_INSECURE_ORIGIN:-0}
       ADMIN_SESSION_TTL: ${ADMIN_SESSION_TTL:-28800}
       ADMIN_LOGIN_MAX_FAILURES: ${ADMIN_LOGIN_MAX_FAILURES:-5}

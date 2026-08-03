@@ -297,7 +297,12 @@ def create_app(overrides: dict | None = None) -> Flask:
         raise RuntimeError("管理审计目录不存在或不是安全目录")
     started_at = time.monotonic()
 
-    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+    # Requests normally cross the host reverse proxy and the repo-web gateway.
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=2, x_proto=1, x_host=1, x_prefix=1)
+
+    def cookie_path(path: str) -> str:
+        prefix = request.script_root.rstrip("/")
+        return f"{prefix}{path}" or "/"
 
     def client_key() -> str:
         return f"{request.remote_addr or 'unknown'}:{app.config['ADMIN_USERNAME']}"
@@ -342,7 +347,7 @@ def create_app(overrides: dict | None = None) -> Flask:
             secure=True,
             httponly=True,
             samesite="Strict",
-            path="/login",
+            path=cookie_path("/login"),
         )
         return response
 
@@ -365,7 +370,7 @@ def create_app(overrides: dict | None = None) -> Flask:
             secure=True,
             httponly=True,
             samesite="Strict",
-            path="/setup",
+            path=cookie_path("/setup"),
         )
         return response
 
@@ -459,7 +464,12 @@ def create_app(overrides: dict | None = None) -> Flask:
         append_audit("admin.setup", "succeeded")
         setup_limiter.reset(key)
         response = redirect(url_for("login", configured="1"), code=303)
-        response.delete_cookie(SETUP_CSRF_COOKIE, path="/setup", secure=True, httponly=True)
+        response.delete_cookie(
+            SETUP_CSRF_COOKIE,
+            path=cookie_path("/setup"),
+            secure=True,
+            httponly=True,
+        )
         return response
 
     @app.route("/login", methods=["GET", "POST"])
@@ -517,7 +527,12 @@ def create_app(overrides: dict | None = None) -> Flask:
             samesite="Strict",
             path="/",
         )
-        response.delete_cookie(LOGIN_CSRF_COOKIE, path="/login", secure=True, httponly=True)
+        response.delete_cookie(
+            LOGIN_CSRF_COOKIE,
+            path=cookie_path("/login"),
+            secure=True,
+            httponly=True,
+        )
         return response
 
     @app.post("/logout")

@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="description" content="PrvAptMirror 签名 APT 软件仓库及客户端配置说明">
+  <title>PrvAptMirror · APT 软件仓库</title>
+  <link rel="stylesheet" href="/assets/repository.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="/" aria-label="PrvAptMirror 首页">
+      <span class="brand-mark" aria-hidden="true">A</span>
+      <span><strong>PrvAptMirror</strong><small>SIGNED PACKAGE ARCHIVE</small></span>
+    </a>
+    <nav aria-label="主导航">
+      <a href="#quick-start">接入仓库</a>
+      <a href="#distributions">发行版</a>
+      <a class="admin-link" href="/admin/">管理员入口 <span aria-hidden="true">↗</span></a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow">SIGNED · VERSIONED · REPRODUCIBLE</p>
+        <h1>一个入口，获取可信的软件包。</h1>
+        <p class="lede">这里是面向 Debian 系统的签名 APT 软件仓库。下载公钥、添加对应发行版的软件源，然后就可以使用标准的 <code>apt</code> 命令安装和更新软件。</p>
+        <div class="hero-actions">
+          <a class="primary-action" href="#quick-start">查看接入步骤 <span aria-hidden="true">↓</span></a>
+          <a class="secondary-action" href="/repository-key.gpg">下载签名公钥</a>
+        </div>
+      </div>
+      <aside class="endpoint-card" aria-label="仓库端点">
+        <header><span class="status-dot"></span><strong>ARCHIVE ENDPOINT</strong><small>ONLINE</small></header>
+        <dl>
+          <div><dt>服务地址</dt><dd>https://<!--# echo var="host" --></dd></div>
+          <div><dt>组件</dt><dd>main</dd></div>
+          <div><dt>签名</dt><dd>OpenPGP · signed-by</dd></div>
+          <div><dt>架构</dt><dd>amd64 · arm64 · armhf · all</dd></div>
+        </dl>
+      </aside>
+    </section>
+
+    <section class="principles" aria-label="仓库特性">
+      <article><span>01</span><strong>签名元数据</strong><p>APT 在下载软件包前验证仓库发布信息。</p></article>
+      <article><span>02</span><strong>独立密钥环</strong><p>使用 <code>signed-by</code> 限定这把公钥的信任范围。</p></article>
+      <article><span>03</span><strong>原子发布</strong><p>每次发布对应不可变快照，失败不会破坏当前版本。</p></article>
+    </section>
+
+    <section class="guide" id="quick-start">
+      <header class="section-heading">
+        <div><p>QUICK START</p><h2>三步接入 APT</h2></div>
+        <span>以下命令需要 root 或 sudo 权限。请把示例中的发行版与代号替换为你的实际系统。</span>
+      </header>
+
+      <ol class="steps">
+        <li>
+          <div class="step-number">01</div>
+          <div class="step-body">
+            <h3>安装仓库签名公钥</h3>
+            <p>公钥只授权这个仓库，不写入系统全局信任库。</p>
+            <pre><code>sudo install -d -m 0755 /etc/apt/keyrings
+curl -fsSL https://<!--# echo var="host" -->/repository-key.gpg \
+  | sudo tee /etc/apt/keyrings/prvaptmirror.gpg &gt;/dev/null</code></pre>
+          </div>
+        </li>
+        <li>
+          <div class="step-number">02</div>
+          <div class="step-body">
+            <h3>添加软件源</h3>
+            <p>下面以 Ubuntu Noble 为例；其他系统可从下方选择对应的路径和代号。</p>
+            <pre><code>echo 'deb [signed-by=/etc/apt/keyrings/prvaptmirror.gpg] https://<!--# echo var="host" -->/ubuntu noble main' \
+  | sudo tee /etc/apt/sources.list.d/prvaptmirror.list</code></pre>
+          </div>
+        </li>
+        <li>
+          <div class="step-number">03</div>
+          <div class="step-body">
+            <h3>刷新索引并安装</h3>
+            <p>仓库接入后，软件包与系统其他来源一样由 APT 管理。</p>
+            <pre><code>sudo apt update
+sudo apt install &lt;package-name&gt;</code></pre>
+          </div>
+        </li>
+      </ol>
+    </section>
+
+    <section class="distributions" id="distributions">
+      <header class="section-heading">
+        <div><p>DISTRIBUTIONS</p><h2>选择系统家族</h2></div>
+        <span>发行版代号必须与仓库中已经发布的代号一致；它不能只根据 DEB 文件自动判断。</span>
+      </header>
+      <div class="distribution-grid">
+        <article>
+          <span class="distribution-code">UBU</span>
+          <h3>Ubuntu</h3>
+          <p>路径 <code>/ubuntu</code>，例如 Noble 24.04。</p>
+          <pre><code>deb [signed-by=/etc/apt/keyrings/prvaptmirror.gpg] https://<!--# echo var="host" -->/ubuntu noble main</code></pre>
+        </article>
+        <article>
+          <span class="distribution-code">DEB</span>
+          <h3>Debian</h3>
+          <p>路径 <code>/debian</code>，例如 Bookworm 12。</p>
+          <pre><code>deb [signed-by=/etc/apt/keyrings/prvaptmirror.gpg] https://<!--# echo var="host" -->/debian bookworm main</code></pre>
+        </article>
+        <article>
+          <span class="distribution-code">LMD</span>
+          <h3>LMDE</h3>
+          <p>路径 <code>/lmde</code>，例如 LMDE 7。</p>
+          <pre><code>deb [signed-by=/etc/apt/keyrings/prvaptmirror.gpg] https://<!--# echo var="host" -->/lmde lmde7 main</code></pre>
+        </article>
+      </div>
+      <p class="notice"><strong>提示：</strong>如果 <code>apt update</code> 返回 404，请先向仓库管理员确认该系统代号是否已经发布。不要使用 <code>trusted=yes</code> 或已弃用的 <code>apt-key</code> 绕过签名校验。</p>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div><span class="brand-mark" aria-hidden="true">A</span><p>公开下载、管理控制与签名执行使用独立权限域。</p></div>
+    <div class="footer-links"><a href="/repository-key.gpg">GPG 公钥</a><a href="/repository-key.asc">ASCII 公钥</a><a href="/admin/">管理台</a></div>
+  </footer>
+</body>
+</html>

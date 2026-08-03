@@ -12,6 +12,8 @@ compose() {
     PRVAPTMIRROR_DATA_DIR="${TEST_ROOT}/data" \
     REPO_HTTP_BIND=127.0.0.1 \
     REPO_HTTP_PORT="${TEST_PORT}" \
+    ADMIN_PUBLIC_ORIGIN=http://127.0.0.1 \
+    ADMIN_ALLOW_INSECURE_ORIGIN=1 \
     REPO_GPG_NAME="PrvAptMirror Smoke Test" \
     REPO_GPG_EMAIL="smoke@example.test" \
         docker compose -p "${TEST_PROJECT}" -f "${COMPOSE_FILE}" "$@"
@@ -95,7 +97,7 @@ make_test_deb prvaptmirror-arm64 1.0.0 arm64
 make_test_deb prvaptmirror-armhf 1.0.0 armhf
 make_test_deb prvaptmirror-common 1.0.0 all
 
-compose build repoctl repo-web
+compose build repoctl repo-web admin-web
 compose run --rm bootstrap
 
 mkdir -p "${TEST_ROOT}/host-gnupg"
@@ -167,6 +169,8 @@ published_port="${published_address##*:}"
 }
 curl --fail --silent --show-error "http://127.0.0.1:${published_port}/healthz" \
     | grep -qx ok
+curl --fail --silent --show-error "http://127.0.0.1:${published_port}/" \
+    | grep -q '三步接入 APT'
 curl --fail --silent --show-error \
     "http://127.0.0.1:${published_port}/ubuntu/dists/noble/InRelease" \
     >/dev/null

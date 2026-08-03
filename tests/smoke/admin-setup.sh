@@ -13,8 +13,6 @@ compose() {
     PRVAPTMIRROR_DATA_DIR="${TEST_ROOT}/data" \
     REPO_HTTP_BIND=127.0.0.1 \
     REPO_HTTP_PORT=0 \
-    ADMIN_HTTP_BIND=127.0.0.1 \
-    ADMIN_HTTP_PORT=0 \
     ADMIN_PUBLIC_ORIGIN="${ORIGIN}" \
     ADMIN_ALLOW_INSECURE_ORIGIN=1 \
     REPO_GPG_NAME="PrvAptMirror Admin Setup Test" \
@@ -43,23 +41,25 @@ cookie_from_jar() {
 
 compose up -d --build
 
-admin_address="$(compose port admin-web 8081)"
-admin_port="${admin_address##*:}"
 repo_address="$(compose port repo-web 8080)"
 repo_port="${repo_address##*:}"
-[[ "${admin_port}" =~ ^[0-9]+$ && "${repo_port}" =~ ^[0-9]+$ ]]
+[[ "${repo_port}" =~ ^[0-9]+$ ]]
 
-admin_base="http://127.0.0.1:${admin_port}"
+repo_base="http://127.0.0.1:${repo_port}"
+admin_base="${repo_base}/admin"
 for _ in $(seq 1 30); do
-    if curl --fail --silent "${admin_base}/healthz" >/dev/null; then
+    if curl --fail --silent "${repo_base}/healthz" >/dev/null \
+        && curl --fail --silent "${admin_base}/healthz" >/dev/null; then
         break
     fi
     sleep 1
 done
+curl --fail --silent "${repo_base}/healthz" | grep -qx ok
+curl --fail --silent "${repo_base}/" | grep -q '三步接入 APT'
 curl --fail --silent "${admin_base}/healthz" | grep -qx ok
 
 setup_output="$(compose exec -T admin-web python3 /app/manage.py setup-token)"
-grep -q '/setup' <<<"${setup_output}"
+grep -q '/admin/setup' <<<"${setup_output}"
 setup_token="$(tail -n 1 <<<"${setup_output}")"
 [[ "${setup_token}" =~ ^[0-9a-f]{64}$ ]]
 
@@ -116,7 +116,7 @@ curl --fail --silent --header "Cookie: ${session_cookie}" "${admin_base}/" \
 grep -q 'CHECKPOINT 02' "${dashboard_html}"
 
 [[ "$(curl --silent --output /dev/null --write-out '%{http_code}' "${admin_base}/setup")" == "404" ]]
-curl --fail --silent "http://127.0.0.1:${repo_port}/repository-key.gpg" >/dev/null
+curl --fail --silent "${repo_base}/repository-key.gpg" >/dev/null
 [[ -n "$(compose ps --status running --quiet repo-worker)" ]]
 
 printf '管理端首次设置端到端测试通过\n'

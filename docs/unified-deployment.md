@@ -9,6 +9,7 @@
 - 保留 `repo-web`、`admin-web` 和 `repo-worker` 的独立容器；
 - 增加一次性、幂等的 `bootstrap` 初始化容器；
 - 用户只操作一个 Compose 项目和 `./scripts/prvaptmirror` 入口；
+- 浏览器和 APT 客户端只使用一个 Web 域名，管理页面固定在 `/admin/`；
 - 所有 PrvAptMirror 持久化数据位于 `.env` 指定的单一目录；
 - `.env` 只保存端口、域名、路径、密钥身份等配置，不保存密码、会话令牌或签名私钥；
 - 首次启动不设置默认管理员密码，管理员在浏览器首次设置页面中创建密码；
@@ -102,9 +103,7 @@ PRVAPTMIRROR_DATA_DIR=./data
 
 REPO_HTTP_BIND=127.0.0.1
 REPO_HTTP_PORT=28080
-ADMIN_HTTP_BIND=127.0.0.1
-ADMIN_HTTP_PORT=28081
-ADMIN_PUBLIC_ORIGIN=https://apt-admin.example.com
+ADMIN_PUBLIC_ORIGIN=https://apt.example.com
 
 ADMIN_USERNAME=admin
 ADMIN_SESSION_TTL=28800
@@ -157,7 +156,7 @@ REPO_GPG_MODE=generate
 - 设置令牌连续失败达到上限后进行限速，但不能自动删除令牌造成远程拒绝服务；
 - 已初始化后再次访问设置端点不能修改密码。
 
-首次设置推荐通过已配置 TLS 的独立管理域名完成。尚未配置反向代理时，可以通过 SSH 本地端口转发访问仅绑定回环地址的临时设置入口；该模式只允许完成设置，不直接签发可在明文 HTTP 上使用的长期管理会话。
+首次设置推荐通过已配置 TLS 的单一站点 `/admin/setup` 完成。尚未配置反向代理时，可以通过 SSH 本地端口转发访问仅绑定回环地址的临时入口；该模式只允许完成设置，不直接签发可在明文 HTTP 上使用的长期管理会话。
 
 密码轮换不与首次设置同时实现。后续可以在登录后的安全页面中要求当前密码、CSRF 和二次确认后轮换，并使全部现有会话失效。
 
@@ -185,7 +184,10 @@ bootstrap（一次性、无网络）
    ├─ 创建首次设置令牌
    └─ 初始化或复用 GPG 密钥
 
-浏览器 ─HTTPS─► admin-web ─────► uploads / jobs / auth / audit
+浏览器与 APT 客户端 ─HTTPS─► repo-web（唯一入口）
+                               │ /admin/
+                               ▼
+                            admin-web ─────► uploads / jobs / auth / audit
                                       │
                                       ▼
                               repo-worker（无网络、串行）
@@ -193,15 +195,15 @@ bootstrap（一次性、无网络）
                                  ▼       ▼        ▼
                                aptly   gnupg    public
                                                    │只读
-APT 客户端 ─HTTPS──────────────────────────────► repo-web
+APT 文件 ◄────────────── data/public（只读）
 ```
 
 | 服务 | 生命周期 | 网络 | 可写目录 | 明确禁止 |
 | --- | --- | --- | --- | --- |
 | `bootstrap` | 启动前一次性执行 | 无网络 | 首次目录、`admin/auth`、`gnupg`、`public` | 对外端口、Docker Socket |
-| `admin-web` | 常驻 | 仅管理入口 | `admin/auth`、`uploads`、`jobs`、`audit` | GPG 私钥、Aptly 数据、公开仓库写权限、Docker Socket |
+| `admin-web` | 常驻 | 仅 Compose 内部，由 `/admin/` 转发 | `admin/auth`、`uploads`、`jobs`、`audit` | GPG 私钥、Aptly 数据、公开仓库写权限、Docker Socket |
 | `repo-worker` | 常驻串行 | `network_mode: none` | `jobs`、Aptly、GPG、公开仓库、审计 | 对外端口、任意网络、Docker Socket |
-| `repo-web` | 常驻 | 仅公开入口 | 无 | 管理数据、上传、Aptly、GPG 私钥 |
+| `repo-web` | 常驻 | 唯一 Web 入口 | 无 | 管理数据、上传、Aptly、GPG 私钥 |
 
 `admin-web` 对 `admin/auth` 的写权限仅用于首次设置的原子落盘和未来明确设计的密码轮换。即使管理服务被攻破，它仍不能直接读取签名私钥或写 Aptly/公开仓库。
 
