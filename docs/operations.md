@@ -1,95 +1,139 @@
 # 运维与使用说明
 
-第一阶段的命令行仓库管理已经稳定可用。项目当前进入单管理员 Web 管理阶段；在 Web 管理功能完成并通过安全测试前，生产环境继续使用本文的命令行流程。第二阶段功能和密码登录要求参见 [单管理员 Web 管理](web-admin.md)。统一多容器编排、单一数据目录和首次 Web 设置目前仍是待确认设计，参见 [统一多容器编排与首次设置](unified-deployment.md)，本文现有命令在该设计实现前仍然有效。
+PrvAptMirror 使用根目录 `compose.yaml` 编排 `bootstrap`、`admin-web`、`repo-worker` 和 `repo-web`。全部应用持久化状态位于 `.env` 指定的单一数据根目录；正常运维只使用 `./scripts/prvaptmirror`。
 
-## 环境要求
+浏览器上传和发布页面尚未实现，因此日常发布暂时继续使用高级 `repoctl` 命令。统一部署与首次设置的安全设计参见 [统一多容器编排与首次设置](unified-deployment.md)。
 
-VPS 需要安装 Docker Engine、Docker Compose 插件以及用于上传文件的 SSH 服务。TLS 和域名反向代理由宿主机现有环境负责。
+## 1. 环境要求
 
-## 1. 配置环境
+- Docker Engine；
+- Docker Compose 插件；
+- 用于部署和读取首次设置令牌的 SSH；
+- 宿主机现有的 DNS、TLS 和反向代理。
 
-在项目根目录复制示例配置：
+项目不会修改宿主机 Nginx、DNS、防火墙或系统目录。Docker Engine 仍会在自己的数据根目录保存镜像、容器元数据和日志。
+
+## 2. 配置
+
+在项目根目录执行：
 
 ```bash
 cp .env.example .env
 ```
 
-至少应修改 `.env` 中的签名身份：
+至少检查：
 
-```text
-REPO_GPG_NAME=你的仓库名称
-REPO_GPG_EMAIL=你的邮箱
+```dotenv
+PRVAPTMIRROR_DATA_DIR=./data
+
+REPO_HTTP_BIND=127.0.0.1
+REPO_HTTP_PORT=28080
+ADMIN_HTTP_BIND=127.0.0.1
+ADMIN_HTTP_PORT=28081
+ADMIN_PUBLIC_ORIGIN=https://apt-admin.example.com
+
+REPO_GPG_NAME=PrvAptMirror Archive
+REPO_GPG_EMAIL=apt@example.com
+REPO_GPG_EXPIRE=2y
 ```
 
-Web 服务默认只监听 `127.0.0.1:8080`，适合由宿主机反向代理访问。只有反向代理运行在其他主机或隔离网络中时，才需要调整监听地址。
+`PRVAPTMIRROR_DATA_DIR` 可以是项目根目录下的相对路径，也可以是其他磁盘上的绝对路径。所有应用绑定挂载都从这个目录派生。
 
-## 2. 构建镜像
+`.env` 不得包含管理员密码、设置令牌、会话令牌、GPG 私钥或 SSH 私钥。
 
-默认从 Docker Hub 获取基础镜像。如果服务器无法访问 Docker Hub，可以在 `.env` 中配置镜像代理：
+如果服务器无法访问默认镜像源，可以在 `.env` 中覆盖基础镜像和 Debian 镜像地址，示例见 `.env.example`。
 
-```text
-REPO_WEB_BASE_IMAGE=docker.m.daocloud.io/nginxinc/nginx-unprivileged:1.27-alpine
-REPOCTL_BASE_IMAGE=docker.m.daocloud.io/library/debian:bookworm-slim
-REPOCTL_APT_MIRROR=http://mirrors.163.com
-```
+## 3. 首次启动
 
 ```bash
-./scripts/prvaptmirror build
+./scripts/prvaptmirror up
+./scripts/prvaptmirror status
 ```
 
-## 3. 初始化签名密钥
+`up` 会构建镜像并执行以下流程：
+
+1. 无网络 `bootstrap` 创建数据布局和权限；
+2. 自动生成一次性管理员设置令牌；
+3. 自动生成或复用 RSA 3072 OpenPGP 仓库签名密钥；
+4. 将公钥导出到 `data/public`；
+5. 启动管理端、无网络 Worker 和只读下载服务。
+
+`bootstrap` 正常状态为 `Exited (0)`；其他三个常驻服务应为 `Up` 和 `healthy`。
+
+初始化是幂等的。重复启动不会覆盖管理员密码、设置令牌或已有 GPG 私钥。
+
+## 4. 浏览器创建管理员密码
+
+在 SSH 终端执行：
 
 ```bash
-./scripts/prvaptmirror repoctl init
+./scripts/prvaptmirror setup
 ```
 
-初始化命令会在 `var/lib/gnupg` 中创建一个无交互签名密钥，并把以下公钥文件发布到 `var/public`：
+命令会显示管理设置地址和一个 64 位十六进制一次性令牌。打开管理页面，输入令牌并创建至少 14 个字符的管理员密码。
+
+设置成功后：
+
+- `data/admin/auth/password-hash` 只保存 Argon2id 哈希；
+- `data/admin/auth/setup-token` 被删除；
+- `/setup` 永久关闭；
+- 再次执行 `./scripts/prvaptmirror setup` 只会报告首次设置已完成。
+
+令牌不会写入 `.env`、URL 或普通容器日志。管理页面必须通过 `ADMIN_PUBLIC_ORIGIN` 对应的 HTTPS 地址访问。仅在回环地址开发或 SSH 隧道测试时才可临时设置：
+
+```dotenv
+ADMIN_PUBLIC_ORIGIN=http://127.0.0.1:28081
+ADMIN_ALLOW_INSECURE_ORIGIN=1
+```
+
+生产环境禁止启用不安全 Origin。
+
+## 5. 反向代理
+
+默认上游：
 
 ```text
-repository-key.gpg
-repository-key.asc
+公开 APT：127.0.0.1:28080
+管理页面：127.0.0.1:28081
 ```
 
-私钥用于 VPS 上的自动签名，因此签名密钥当前不设置交互式口令。它与第二阶段的 Web 管理员登录密码是两类凭据：管理员密码只用于登录管理页面，不能用于解密或导出签名私钥。必须限制 VPS 和该目录的访问权限，并将私钥加密备份到其他位置。
+公开域名和管理域名应相互独立。公开入口只允许 `GET` 和 `HEAD`；管理入口必须启用 HTTPS，并保留原始 Host、协议和客户端地址转发头。
 
-## 4. 创建发行版仓库
+健康检查：
 
-例如创建 Ubuntu 24.04 Noble 仓库：
+```text
+http://127.0.0.1:28080/healthz
+http://127.0.0.1:28081/healthz
+```
+
+## 6. 生命周期命令
+
+```bash
+./scripts/prvaptmirror up
+./scripts/prvaptmirror stop
+./scripts/prvaptmirror status
+./scripts/prvaptmirror logs
+```
+
+`stop` 只停止常驻容器，不删除数据。项目没有提供自动清空数据的命令。
+
+管理会话目前保存在单个 Gunicorn 进程内存中，管理服务重启会使现有会话失效。
+
+## 7. 高级仓库操作
+
+浏览器上传和发布任务接入前，可以通过 SSH 把 DEB 放到默认数据根目录：
+
+```bash
+scp example_1.0.0_arm64.deb user@vps:/path/to/PrvAptMirror/data/incoming/
+```
+
+创建仓库并发布：
 
 ```bash
 ./scripts/prvaptmirror repoctl repo create ubuntu noble
-```
-
-其他示例：
-
-```bash
-./scripts/prvaptmirror repoctl repo create ubuntu jammy
-./scripts/prvaptmirror repoctl repo create debian bookworm
-./scripts/prvaptmirror repoctl repo create lmde lmde6
-```
-
-系统不会判断一个 DEB 适用于哪个发行版。创建和导入时必须由管理员选择正确目标。
-
-## 5. 上传并发布软件包
-
-通过 SCP 将软件包放入 `var/incoming`：
-
-```bash
-scp example_1.0.0_arm64.deb user@vps:/path/to/PrvAptMirror/var/incoming/
-```
-
-然后导入并发布：
-
-```bash
 ./scripts/prvaptmirror repoctl package add \
   ubuntu noble /incoming/example_1.0.0_arm64.deb
 ```
-
-该命令会依次完成元数据检查、架构检查、导入、创建快照、签名和原子发布。默认允许 `amd64`、`arm64`、`armhf` 和 `all`。
-
-第二阶段将提供浏览器上传、DEB 元数据预检、SHA-256 展示和发布确认。在该功能正式上线前，不应临时增加匿名 HTTP 上传接口。
-
-同一时间只能执行一个会修改仓库的 `repoctl` 命令。程序会使用共享文件锁阻止并发写入，遇到锁冲突时等待当前任务结束后重试即可。
 
 查看软件包和快照：
 
@@ -98,24 +142,24 @@ scp example_1.0.0_arm64.deb user@vps:/path/to/PrvAptMirror/var/incoming/
 ./scripts/prvaptmirror repoctl snapshot list ubuntu noble
 ```
 
-## 6. 启动下载服务
+回滚到前一个快照：
 
 ```bash
-./scripts/prvaptmirror up
-./scripts/prvaptmirror status
+./scripts/prvaptmirror repoctl rollback ubuntu noble
 ```
 
-健康检查地址为：
+或者指定快照：
 
-```text
-http://127.0.0.1:8080/healthz
+```bash
+./scripts/prvaptmirror repoctl rollback \
+  ubuntu noble ubuntu-noble-20260801T120000123456789Z
 ```
 
-将现有反向代理的上游设置为该地址对应的端口即可。反向代理需要允许 `GET` 和 `HEAD`，不需要开放写请求。
+系统无法从 DEB 元数据可靠判断目标发行版，管理员必须明确选择正确的 family 和 suite。写操作使用共享文件锁，不允许并发发布。
 
-## 7. 配置客户端
+## 8. 配置 APT 客户端
 
-以下示例假设仓库域名为 `apt.example.com`，目标仓库为 Ubuntu Noble：
+以下示例假设公开域名为 `apt.example.com`，目标仓库为 Ubuntu Noble：
 
 ```bash
 sudo install -d -m 0755 /etc/apt/keyrings
@@ -130,106 +174,44 @@ sudo apt update
 
 Debian 和 LMDE 客户端分别使用 `/debian` 和 `/lmde` 路径。
 
-## 8. 回滚
+## 9. 数据与备份
 
-不指定快照时回滚到当前快照之前的版本：
-
-```bash
-./scripts/prvaptmirror repoctl rollback ubuntu noble
-```
-
-也可以先列出快照，再指定目标：
-
-```bash
-./scripts/prvaptmirror repoctl snapshot list ubuntu noble
-./scripts/prvaptmirror repoctl rollback ubuntu noble ubuntu-noble-20260801T120000123456789Z
-```
-
-## 9. 备份
-
-至少需要备份：
+建议整体备份 `PRVAPTMIRROR_DATA_DIR`。至少必须保护：
 
 ```text
-var/lib/aptly
-var/lib/gnupg
+data/aptly
+data/gnupg
+data/admin/auth
 ```
 
-`var/public` 可以根据 Aptly 状态重新发布，但备份它能缩短恢复时间。`var/incoming` 只保存待导入文件，不应作为正式软件包归档。
+`data/gnupg` 包含无人值守签名私钥，备份必须额外加密并存放在服务器之外。`data/public` 可以根据 Aptly 状态重新发布，但备份它能缩短恢复时间。
+
+不要单独移动数据根目录中的某个子目录。恢复时应保持原有目录结构和权限，再运行 `./scripts/prvaptmirror up` 让 bootstrap 校验状态。
 
 ## 10. 测试
 
-运行不需要 Docker 的静态检查：
+静态检查：
 
 ```bash
 ./tests/smoke/static.sh
 ```
 
-在安装 Docker 的环境中运行完整端到端测试：
+管理端认证和首次设置测试：
+
+```bash
+./scripts/prvaptmirror test
+```
+
+完整仓库端到端测试：
 
 ```bash
 ./tests/smoke/run.sh
 ```
 
-端到端测试会在临时目录中生成两个测试 DEB，验证初始化、签名、首次发布、更新、回滚以及 Web 下载服务。
-
-第二阶段还必须增加密码登录、登录限速、会话、CSRF、上传路径穿越、超大文件、伪造 DEB、重复提交、并发任务和审计日志测试，完成标准参见 [单管理员 Web 管理](web-admin.md)。
-
-## 11. 启用管理 Web（检查点 1）
-
-检查点 1 只提供安全登录和公开仓库只读概览，不提供上传或发布写操作。管理服务使用显式 `admin` profile，不会随公开下载服务自动启动。
-
-先在 `.env` 设置浏览器实际访问的 HTTPS Origin：
-
-```text
-ADMIN_PUBLIC_ORIGIN=https://apt-admin.example.com
-ADMIN_USERNAME=admin
-ADMIN_HTTP_BIND=127.0.0.1
-ADMIN_HTTP_PORT=28081
-```
-
-生成 Argon2id 密码哈希。密码通过终端无回显输入，重定向文件中只有哈希：
+完整首次设置端到端测试：
 
 ```bash
-umask 077
-./scripts/prvaptmirror admin hash-password \
-  > var/admin/secrets/password-hash
-sudo chown 10001:10001 var/admin/secrets/password-hash
-chmod 0400 var/admin/secrets/password-hash
+./tests/smoke/admin-setup.sh
 ```
 
-启动并检查服务：
-
-```bash
-./scripts/prvaptmirror admin up
-./scripts/prvaptmirror admin status
-```
-
-将独立管理域名反代到 `127.0.0.1:28081`，并配置有效 TLS。应用会严格校验 `Origin` 是否等于 `ADMIN_PUBLIC_ORIGIN`。管理端不能直接暴露内部端口，也不能与匿名 APT 下载路径共用鉴权规则。
-
-当前会话存放在单个 Gunicorn 进程内存中，服务重启会使全部会话失效，这是单管理员阶段的安全默认。运行认证测试：
-
-```bash
-./scripts/prvaptmirror admin test
-```
-
-## 12. 目标统一部署流程（尚未实现）
-
-下一批改造完成后，目标流程将取代第 2、3、6、11 节中分散的构建、密钥初始化和管理密码准备步骤：
-
-```bash
-cp .env.example .env
-# 修改数据目录、公开/管理地址和 GPG 身份
-./scripts/prvaptmirror up
-./scripts/prvaptmirror setup
-```
-
-其中：
-
-- `up` 启动一个 Compose 项目，先由无网络 `bootstrap` 幂等创建目录、权限、一次性设置令牌和 GPG 密钥，再启动常驻服务；
-- `setup` 通过 SSH 终端读取临时设置令牌并提示浏览器访问方式，不生成默认管理员密码；
-- 管理员在浏览器中输入设置令牌并创建密码，磁盘只保存 Argon2id 哈希；
-- 全部应用数据只写入 `.env` 的 `PRVAPTMIRROR_DATA_DIR`；
-- `.env` 不保存密码、设置令牌或 GPG 私钥；
-- 完成首次设置后，日常操作只需要 `up`、`stop`、`status` 和 `logs`。
-
-当前已有 `var/` 数据不会被静默移动或覆盖。实现时必须先提供数据检查、备份提示和显式迁移路径，完整验收标准见统一部署设计文档。
+端到端测试使用临时数据根目录，验证 bootstrap、GPG 签名、多架构索引、更新、回滚和公开下载，不会改写正式数据目录。

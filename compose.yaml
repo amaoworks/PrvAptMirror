@@ -1,0 +1,201 @@
+name: prvaptmirror
+
+x-repository-environment: &repository-environment
+  REPO_COMPONENT: ${REPO_COMPONENT:-main}
+  REPO_ARCHITECTURES: ${REPO_ARCHITECTURES:-amd64,arm64,armhf}
+  REPO_GPG_NAME: ${REPO_GPG_NAME:-PrvAptMirror Archive}
+  REPO_GPG_EMAIL: ${REPO_GPG_EMAIL:-}
+  REPO_GPG_EXPIRE: ${REPO_GPG_EXPIRE:-2y}
+  REPO_GPG_MODE: ${REPO_GPG_MODE:-generate}
+
+x-repoctl-build: &repoctl-build
+  context: .
+  dockerfile: containers/repoctl/Dockerfile
+  args:
+    REPOCTL_BASE_IMAGE: ${REPOCTL_BASE_IMAGE:-debian:bookworm-slim}
+    REPOCTL_APT_MIRROR: ${REPOCTL_APT_MIRROR:-}
+
+services:
+  bootstrap:
+    build: *repoctl-build
+    image: ${REPOCTL_IMAGE:-prvaptmirror/repoctl:local}
+    command: ["bootstrap"]
+    network_mode: none
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+    environment:
+      <<: *repository-environment
+      PRVAPTMIRROR_DATA_ROOT: /data
+      APTLY_ROOT: /data/aptly
+      GNUPGHOME: /data/gnupg
+      INCOMING_ROOT: /data/incoming
+      PUBLIC_ROOT: /data/public
+      STATE_ROOT: /data/state/repoctl
+      ADMIN_AUTH_ROOT: /data/admin/auth
+      ADMIN_UID: "10001"
+      ADMIN_GID: "10001"
+    volumes:
+      - ./config/aptly/aptly.conf:/etc/aptly.conf:ro
+      - ${PRVAPTMIRROR_DATA_DIR:-./data}:/data
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    restart: "no"
+
+  repo-web:
+    build:
+      context: .
+      dockerfile: containers/repo-web/Dockerfile
+      args:
+        REPO_WEB_BASE_IMAGE: ${REPO_WEB_BASE_IMAGE:-nginxinc/nginx-unprivileged:1.27-alpine}
+    image: ${REPO_WEB_IMAGE:-prvaptmirror/repo-web:local}
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    ports:
+      - "${REPO_HTTP_BIND:-127.0.0.1}:${REPO_HTTP_PORT:-28080}:8080"
+    volumes:
+      - ${PRVAPTMIRROR_DATA_DIR:-./data}/public:/srv/repository:ro
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1:8080/healthz | grep -qx ok"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  admin-web:
+    build:
+      context: .
+      dockerfile: containers/admin-web/Dockerfile
+      target: runtime
+      args:
+        ADMIN_WEB_BASE_IMAGE: ${ADMIN_WEB_BASE_IMAGE:-debian:bookworm-slim}
+    image: ${ADMIN_WEB_IMAGE:-prvaptmirror/admin-web:local}
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    user: "10001:10001"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    ports:
+      - "${ADMIN_HTTP_BIND:-127.0.0.1}:${ADMIN_HTTP_PORT:-28081}:8081"
+    environment:
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PUBLIC_ORIGIN: ${ADMIN_PUBLIC_ORIGIN:-}
+      ADMIN_ALLOW_INSECURE_ORIGIN: ${ADMIN_ALLOW_INSECURE_ORIGIN:-0}
+      ADMIN_SESSION_TTL: ${ADMIN_SESSION_TTL:-28800}
+      ADMIN_LOGIN_MAX_FAILURES: ${ADMIN_LOGIN_MAX_FAILURES:-5}
+      ADMIN_SETUP_MAX_FAILURES: ${ADMIN_SETUP_MAX_FAILURES:-10}
+      ADMIN_AUTH_ROOT: /data/admin/auth
+      ADMIN_AUDIT_ROOT: /data/admin/audit
+      REPOSITORY_ROOT: /srv/repository
+    volumes:
+      - ${PRVAPTMIRROR_DATA_DIR:-./data}/admin:/data/admin
+      - ${PRVAPTMIRROR_DATA_DIR:-./data}/public:/srv/repository:ro
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8081/healthz', timeout=2).read()"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  repo-worker:
+    build: *repoctl-build
+    image: ${REPOCTL_IMAGE:-prvaptmirror/repoctl:local}
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+    entrypoint: ["/usr/local/bin/repo-worker"]
+    user: "10001:10001"
+    network_mode: none
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      JOB_ROOT: /jobs
+    volumes:
+      - ${PRVAPTMIRROR_DATA_DIR:-./data}/admin/jobs:/jobs
+      - ${PRVAPTMIRROR_DATA_DIR:-./data}/admin/uploads:/uploads
+      - ${PRVAPTMIRROR_DATA_DIR:-./data}/admin/audit:/audit
+      - ${PRVAPTMIRROR_DATA_DIR:-./data}/incoming:/incoming:ro
+      - ${PRVAPTMIRROR_DATA_DIR:-./data}/aptly:/var/lib/aptly
+      - ${PRVAPTMIRROR_DATA_DIR:-./data}/gnupg:/var/lib/prvaptmirror/gnupg
+      - ${PRVAPTMIRROR_DATA_DIR:-./data}/public:/var/public
+      - ${PRVAPTMIRROR_DATA_DIR:-./data}/state:/state
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /jobs/.worker-ready && kill -0 1"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 3s
+    restart: unless-stopped
+
+  repoctl:
+    profiles:
+      - tools
+    build: *repoctl-build
+    image: ${REPOCTL_IMAGE:-prvaptmirror/repoctl:local}
+    depends_on:
+      bootstrap:
+        condition: service_completed_successfully
+    user: "10001:10001"
+    network_mode: none
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    environment:
+      <<: *repository-environment
+    volumes:
+      - ./config/aptly/aptly.conf:/etc/aptly.conf:ro
+      - ${PRVAPTMIRROR_DATA_DIR:-./data}/incoming:/incoming:ro
+      - ${PRVAPTMIRROR_DATA_DIR:-./data}/aptly:/var/lib/aptly
+      - ${PRVAPTMIRROR_DATA_DIR:-./data}/gnupg:/var/lib/prvaptmirror/gnupg
+      - ${PRVAPTMIRROR_DATA_DIR:-./data}/public:/var/public
+      - ${PRVAPTMIRROR_DATA_DIR:-./data}/state/repoctl:/var/lib/aptly/prvaptmirror-state
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+
+  admin-web-test:
+    profiles:
+      - test
+    build:
+      context: .
+      dockerfile: containers/admin-web/Dockerfile
+      target: test
+      args:
+        ADMIN_WEB_BASE_IMAGE: ${ADMIN_WEB_BASE_IMAGE:-debian:bookworm-slim}
+    image: ${ADMIN_WEB_TEST_IMAGE:-prvaptmirror/admin-web:test}
+    network_mode: none
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:size=16m,mode=1777

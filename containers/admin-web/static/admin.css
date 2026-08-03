@@ -96,6 +96,7 @@ button, input { font: inherit; }
   font-size: 17px;
   line-height: 1.9;
 }
+.login-copy > p:last-child code { font-family: var(--font-mono); font-size: .82em; }
 .security-strip { display: grid; grid-template-columns: repeat(3, 1fr); border-top: 1px solid var(--ink); border-bottom: 1px solid var(--ink); }
 .security-strip span { padding: 14px 12px; border-right: 1px solid var(--line); color: var(--muted); font-family: var(--font-mono); font-size: 9px; text-transform: uppercase; }
 .security-strip span:first-child { padding-left: 0; }

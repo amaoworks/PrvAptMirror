@@ -5,8 +5,10 @@ set -Eeuo pipefail
 readonly PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 bash -n "${PROJECT_ROOT}/containers/repoctl/repoctl"
+bash -n "${PROJECT_ROOT}/containers/repo-worker/worker"
 bash -n "${PROJECT_ROOT}/scripts/prvaptmirror"
 bash -n "${PROJECT_ROOT}/tests/smoke/run.sh"
+bash -n "${PROJECT_ROOT}/tests/smoke/admin-setup.sh"
 bash -n "${PROJECT_ROOT}/tests/smoke/repoctl-local.sh"
 python3 -c 'import ast,sys; [ast.parse(open(path, encoding="utf-8").read(), filename=path) for path in sys.argv[1:]]' \
     "${PROJECT_ROOT}/containers/admin-web/app.py" \
@@ -20,7 +22,7 @@ fi
 
 if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
     docker compose \
-        -f "${PROJECT_ROOT}/deploy/compose/compose.yaml" \
+        -f "${PROJECT_ROOT}/compose.yaml" \
         --profile "*" \
         config --quiet
 fi

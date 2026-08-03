@@ -3,7 +3,7 @@
 set -Eeuo pipefail
 
 readonly PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-readonly COMPOSE_FILE="${PROJECT_ROOT}/deploy/compose/compose.yaml"
+readonly COMPOSE_FILE="${PROJECT_ROOT}/compose.yaml"
 
 compose() {
     local -a options=(-f "${COMPOSE_FILE}")
@@ -18,18 +18,19 @@ usage() {
 用法：
   ./scripts/prvaptmirror build
   ./scripts/prvaptmirror up
-  ./scripts/prvaptmirror down
+  ./scripts/prvaptmirror stop
   ./scripts/prvaptmirror logs
   ./scripts/prvaptmirror status
+  ./scripts/prvaptmirror setup
   ./scripts/prvaptmirror repoctl <参数...>
-  ./scripts/prvaptmirror admin <up|down|logs|status|hash-password|test>
+  ./scripts/prvaptmirror test
 
 示例：
+  ./scripts/prvaptmirror up
+  ./scripts/prvaptmirror setup
   ./scripts/prvaptmirror repoctl init
   ./scripts/prvaptmirror repoctl repo create ubuntu noble
   ./scripts/prvaptmirror repoctl package add ubuntu noble /incoming/example.deb
-  ./scripts/prvaptmirror admin hash-password
-  ./scripts/prvaptmirror admin up
 EOF
 }
 
@@ -47,55 +48,29 @@ command_name="${1:-help}"
 
 case "${command_name}" in
     build)
-        compose --profile tools build repo-web repoctl admin-tools "$@"
+        compose --profile tools --profile test build "$@"
         ;;
     up)
-        compose up -d --build repo-web "$@"
+        compose up -d --build bootstrap repo-web admin-web repo-worker "$@"
         ;;
-    down)
-        compose down "$@"
+    stop)
+        compose stop repo-web admin-web repo-worker "$@"
         ;;
     logs)
-        compose logs -f repo-web "$@"
+        compose logs -f "$@"
         ;;
     status)
-        compose --profile admin ps "$@"
+        compose ps -a "$@"
+        ;;
+    setup)
+        compose exec -T admin-web python3 /app/manage.py setup-token "$@"
         ;;
     repoctl)
         compose run --rm repoctl "$@"
         ;;
-    admin)
-        admin_command="${1:-help}"
-        [[ $# -eq 0 ]] || shift
-        case "${admin_command}" in
-            up)
-                compose --profile admin up -d --build admin-web "$@"
-                ;;
-            down)
-                compose --profile admin stop admin-web "$@"
-                ;;
-            logs)
-                compose --profile admin logs -f admin-web "$@"
-                ;;
-            status)
-                compose --profile admin ps admin-web "$@"
-                ;;
-            hash-password)
-                compose --profile tools run --rm admin-tools hash-password "$@"
-                ;;
-            test)
-                compose --profile test build admin-web-test
-                compose --profile test run --rm admin-web-test "$@"
-                ;;
-            help|-h|--help)
-                usage
-                ;;
-            *)
-                usage >&2
-                printf '错误：未知 admin 命令：%s\n' "${admin_command}" >&2
-                exit 1
-                ;;
-        esac
+    test)
+        compose --profile test build admin-web-test
+        compose --profile test run --rm admin-web-test "$@"
         ;;
     help|-h|--help)
         usage

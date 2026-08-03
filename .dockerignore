@@ -2,10 +2,9 @@
 .agents
 .codex
 .env*
-var
+data
 automation
 catalog
-deploy
 docs
 packaging
 tests

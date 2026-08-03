@@ -11,6 +11,11 @@ readonly STATE_ROOT="${STATE_ROOT:-/var/lib/aptly/prvaptmirror-state}"
 readonly REPO_COMPONENT="${REPO_COMPONENT:-main}"
 readonly REPO_ARCHITECTURES="${REPO_ARCHITECTURES:-amd64,arm64,armhf}"
 readonly PUBLISH_ENDPOINT_NAME="${PUBLISH_ENDPOINT_NAME:-public}"
+readonly DATA_ROOT="${PRVAPTMIRROR_DATA_ROOT:-/data}"
+readonly ADMIN_AUTH_ROOT="${ADMIN_AUTH_ROOT:-${DATA_ROOT}/admin/auth}"
+readonly ADMIN_UID="${ADMIN_UID:-10001}"
+readonly ADMIN_GID="${ADMIN_GID:-10001}"
+readonly DATA_LAYOUT_VERSION="1"
 
 export GNUPGHOME
 
@@ -28,6 +33,7 @@ usage() {
 PrvAptMirror 仓库管理命令
 
 用法：
+  repoctl bootstrap
   repoctl init
   repoctl repo create <family> <suite>
   repoctl package add <family> <suite> <deb-path>
@@ -38,6 +44,7 @@ PrvAptMirror 仓库管理命令
   repoctl help
 
 示例：
+  repoctl bootstrap
   repoctl init
   repoctl repo create ubuntu noble
   repoctl package add ubuntu noble /incoming/example_1.0.0_arm64.deb
@@ -52,7 +59,9 @@ prepare_directories() {
     [[ -f "${APTLY_CONFIG}" ]] || die "找不到 Aptly 配置：${APTLY_CONFIG}"
 
     mkdir -p "${APTLY_ROOT}" "${GNUPGHOME}" "${PUBLIC_ROOT}" "${STATE_ROOT}"
-    chown -R "$(id -u):$(id -g)" "${GNUPGHOME}"
+    if [[ "$(id -u)" -eq 0 ]]; then
+        chown -R "$(id -u):$(id -g)" "${GNUPGHOME}"
+    fi
     chmod 0700 "${GNUPGHOME}"
     chmod 0755 "${APTLY_ROOT}" "${PUBLIC_ROOT}" "${STATE_ROOT}"
 }
@@ -121,7 +130,10 @@ cmd_init() {
     if fingerprint="$(secret_key_fingerprint)"; then
         log "签名密钥已经存在：${fingerprint}"
     else
-        identity="${REPO_GPG_NAME:-PrvAptMirror Archive} <${REPO_GPG_EMAIL:-apt@example.invalid}>"
+        local email="${REPO_GPG_EMAIL:-}"
+        [[ -n "${email}" && "${email}" != *.invalid ]] \
+            || die "首次生成 GPG 密钥前必须在 .env 设置有效的 REPO_GPG_EMAIL"
+        identity="${REPO_GPG_NAME:-PrvAptMirror Archive} <${email}>"
         log "正在生成仓库签名密钥：${identity}"
         gpg --batch \
             --pinentry-mode loopback \
@@ -138,6 +150,89 @@ cmd_init() {
 
     export_public_key "${fingerprint}"
     log "初始化完成"
+}
+
+cmd_bootstrap() {
+    [[ $# -eq 0 ]] || die "用法：repoctl bootstrap"
+    [[ "${REPO_GPG_MODE:-generate}" == "generate" ]] \
+        || die "当前只支持 REPO_GPG_MODE=generate"
+    [[ "${DATA_ROOT}" == /* && "${DATA_ROOT}" != "/" ]] \
+        || die "PRVAPTMIRROR_DATA_ROOT 必须是非根绝对路径"
+
+    local password_hash="${ADMIN_AUTH_ROOT}/password-hash"
+    local setup_token="${ADMIN_AUTH_ROOT}/setup-token"
+    local token_tmp=""
+    local state_tmp="${DATA_ROOT}/state/.bootstrap-version.tmp"
+
+    mkdir -p \
+        "${ADMIN_AUTH_ROOT}" \
+        "${DATA_ROOT}/admin/uploads" \
+        "${DATA_ROOT}/admin/jobs" \
+        "${DATA_ROOT}/admin/audit" \
+        "${APTLY_ROOT}" \
+        "${GNUPGHOME}" \
+        "${INCOMING_ROOT}" \
+        "${PUBLIC_ROOT}" \
+        "${STATE_ROOT}" \
+        "${DATA_ROOT}/state"
+
+    chmod 0700 "${ADMIN_AUTH_ROOT}"
+    chmod 0700 "${GNUPGHOME}"
+    chmod 0750 \
+        "${DATA_ROOT}/admin" \
+        "${DATA_ROOT}/admin/uploads" \
+        "${DATA_ROOT}/admin/jobs" \
+        "${DATA_ROOT}/admin/audit"
+    chmod 0755 \
+        "${APTLY_ROOT}" \
+        "${INCOMING_ROOT}" \
+        "${PUBLIC_ROOT}" \
+        "${STATE_ROOT}" \
+        "${DATA_ROOT}/state"
+
+    if [[ -e "${password_hash}" ]]; then
+        [[ -f "${password_hash}" && ! -L "${password_hash}" ]] \
+            || die "管理员密码哈希不是安全的普通文件"
+        grep -q '^\$argon2id\$' "${password_hash}" \
+            || die "管理员密码哈希格式无效"
+        rm -f -- "${setup_token}"
+        log "管理员首次设置已经完成"
+    elif [[ -e "${setup_token}" ]]; then
+        [[ -f "${setup_token}" && ! -L "${setup_token}" ]] \
+            || die "首次设置令牌不是安全的普通文件"
+        log "复用尚未使用的一次性设置令牌"
+    else
+        umask 077
+        token_tmp="$(mktemp "${ADMIN_AUTH_ROOT}/.setup-token.XXXXXXXX")"
+        od -An -N32 -tx1 /dev/urandom \
+            | tr -d ' \n' >"${token_tmp}"
+        printf '\n' >>"${token_tmp}"
+        chmod 0600 "${token_tmp}"
+        mv -f -- "${token_tmp}" "${setup_token}"
+        token_tmp=""
+        log "已创建一次性管理员设置令牌；通过 ./scripts/prvaptmirror setup 查看"
+    fi
+
+    cmd_init
+
+    chown -R "${ADMIN_UID}:${ADMIN_GID}" \
+        "${DATA_ROOT}/admin" \
+        "${APTLY_ROOT}" \
+        "${GNUPGHOME}" \
+        "${INCOMING_ROOT}" \
+        "${PUBLIC_ROOT}" \
+        "${STATE_ROOT}" \
+        "${DATA_ROOT}/state"
+    chmod 0700 "${ADMIN_AUTH_ROOT}" "${GNUPGHOME}"
+    [[ ! -e "${setup_token}" ]] || chmod 0600 "${setup_token}"
+    [[ ! -e "${password_hash}" ]] || chmod 0600 "${password_hash}"
+    chmod -R a+rX "${PUBLIC_ROOT}"
+
+    printf '%s\n' "${DATA_LAYOUT_VERSION}" >"${state_tmp}"
+    chown "${ADMIN_UID}:${ADMIN_GID}" "${state_tmp}"
+    chmod 0644 "${state_tmp}"
+    mv -f -- "${state_tmp}" "${DATA_ROOT}/state/bootstrap-version"
+    log "数据目录初始化完成：${DATA_ROOT}（布局版本 ${DATA_LAYOUT_VERSION}）"
 }
 
 require_signing_key() {
@@ -449,6 +544,9 @@ main() {
     [[ $# -eq 0 ]] || shift
 
     case "${command}" in
+        bootstrap)
+            cmd_bootstrap "$@"
+            ;;
         init)
             [[ $# -eq 0 ]] || die "用法：repoctl init"
             cmd_init

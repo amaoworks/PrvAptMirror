@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}首次设置 · PrvAptMirror{% endblock %}
+{% block body %}
+<main class="login-shell">
+  <section class="login-story" aria-labelledby="setup-heading">
+    <a class="brand" href="/setup" aria-label="PrvAptMirror 首次设置">
+      <span class="brand-mark" aria-hidden="true">A</span>
+      <span><strong>PrvAptMirror</strong><small>ARCHIVE CONTROL PLANE</small></span>
+    </a>
+
+    <div class="login-copy">
+      <p class="eyebrow">FIRST RUN · CLAIM ADMIN</p>
+      <h1 id="setup-heading">创建你的<em>管理凭据。</em></h1>
+      <p>系统没有默认密码。请先通过 SSH 执行 <code>./scripts/prvaptmirror setup</code> 获取一次性令牌，再在这里创建管理员密码。</p>
+    </div>
+
+    <div class="security-strip" aria-label="首次设置约束">
+      <span><strong>01</strong> One-time token</span>
+      <span><strong>02</strong> Argon2id</span>
+      <span><strong>03</strong> Atomic write</span>
+    </div>
+  </section>
+
+  <section class="login-panel" aria-label="创建管理员密码">
+    <div class="trace-card">
+      <header><span class="status-dot"></span><strong>BOOTSTRAP CLAIM</strong><small>ONE TIME ONLY</small></header>
+      <ol aria-hidden="true">
+        <li><span>01</span><small>ssh</small><code>读取本机设置令牌</code></li>
+        <li><span>02</span><small>guard</small><code>Origin · CSRF · rate limit</code></li>
+        <li><span>03</span><small>argon2</small><code>只保存密码哈希</code></li>
+        <li><span>04</span><small>close</small><code>删除令牌并关闭入口</code></li>
+      </ol>
+      <footer><span>no default password</span><span>single admin</span><span>local claim</span></footer>
+    </div>
+
+    <form class="login-form" method="post" action="{{ url_for('setup') }}" autocomplete="off">
+      <div class="form-heading">
+        <p>INITIAL ADMIN SETUP</p>
+        <h2>设置 {{ username }} 的密码</h2>
+        <span>设置成功后，一次性令牌将立即失效。</span>
+      </div>
+      {% if message %}<p class="form-alert" role="alert">{{ message }}</p>{% endif %}
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label>
+        <span>一次性设置令牌</span>
+        <input name="setup_token" required minlength="64" maxlength="128" autocomplete="off" spellcheck="false">
+      </label>
+      <label>
+        <span>管理员密码</span>
+        <input type="password" name="password" required minlength="14" maxlength="1024" autocomplete="new-password">
+      </label>
+      <label>
+        <span>确认管理员密码</span>
+        <input type="password" name="password_confirmation" required minlength="14" maxlength="1024" autocomplete="new-password">
+      </label>
+      <button class="primary-button" type="submit">
+        <span><small>CREATE CREDENTIAL</small><strong>保存并关闭首次设置</strong></span>
+        <b aria-hidden="true">→</b>
+      </button>
+    </form>
+  </section>
+</main>
+{% endblock %}

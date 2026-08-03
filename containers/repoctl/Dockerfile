@@ -17,8 +17,9 @@ RUN if [ -n "${REPOCTL_APT_MIRROR}" ]; then \
     && rm -rf /var/lib/apt/lists/*
 
 COPY containers/repoctl/repoctl /usr/local/bin/repoctl
+COPY containers/repo-worker/worker /usr/local/bin/repo-worker
 
-RUN chmod 0755 /usr/local/bin/repoctl
+RUN chmod 0755 /usr/local/bin/repoctl /usr/local/bin/repo-worker
 
 ENV APTLY_CONFIG=/etc/aptly.conf \
     GNUPGHOME=/var/lib/prvaptmirror/gnupg

@@ -22,15 +22,15 @@ trap cleanup EXIT
 mkdir -p \
     "${TEST_ROOT}/bin" \
     "${TEST_ROOT}/incoming" \
-    "${TEST_ROOT}/var/lib/aptly" \
-    "${TEST_ROOT}/var/lib/gnupg" \
-    "${TEST_ROOT}/var/public" \
+    "${TEST_ROOT}/data/aptly" \
+    "${TEST_ROOT}/data/gnupg" \
+    "${TEST_ROOT}/data/public" \
     "${TEST_ROOT}/state"
 ln -s "${APTLY_BINARY}" "${TEST_ROOT}/bin/aptly"
 
 sed \
-    -e "s#/var/lib/aptly#${TEST_ROOT}/var/lib/aptly#g" \
-    -e "s#/var/public#${TEST_ROOT}/var/public#g" \
+    -e "s#/var/lib/aptly#${TEST_ROOT}/data/aptly#g" \
+    -e "s#/var/public#${TEST_ROOT}/data/public#g" \
     "${PROJECT_ROOT}/config/aptly/aptly.conf" \
     >"${TEST_ROOT}/aptly.conf"
 
@@ -72,13 +72,13 @@ package_index_contains() {
 repoctl() {
     PATH="${TEST_ROOT}/bin:${PATH}" \
     APTLY_CONFIG="${TEST_ROOT}/aptly.conf" \
-    APTLY_ROOT="${TEST_ROOT}/var/lib/aptly" \
-    GNUPGHOME="${TEST_ROOT}/var/lib/gnupg" \
+    APTLY_ROOT="${TEST_ROOT}/data/aptly" \
+    GNUPGHOME="${TEST_ROOT}/data/gnupg" \
     INCOMING_ROOT="${TEST_ROOT}/incoming" \
-    PUBLIC_ROOT="${TEST_ROOT}/var/public" \
+    PUBLIC_ROOT="${TEST_ROOT}/data/public" \
     STATE_ROOT="${TEST_ROOT}/state" \
     REPO_GPG_NAME="PrvAptMirror Repoctl Test" \
-    REPO_GPG_EMAIL="test@example.invalid" \
+    REPO_GPG_EMAIL="test@example.test" \
     REPO_GPG_EXPIRE="1d" \
         "${REPOCTL}" "$@"
 }
@@ -97,30 +97,30 @@ repoctl package add ubuntu noble "${TEST_ROOT}/incoming/prvaptmirror-armhf_1.0.0
 repoctl package add ubuntu noble "${TEST_ROOT}/incoming/prvaptmirror-common_1.0.0_all.deb"
 
 gpgv \
-    --keyring "${TEST_ROOT}/var/public/repository-key.gpg" \
-    "${TEST_ROOT}/var/public/ubuntu/dists/noble/InRelease"
+    --keyring "${TEST_ROOT}/data/public/repository-key.gpg" \
+    "${TEST_ROOT}/data/public/ubuntu/dists/noble/InRelease"
 package_index_contains \
-    "${TEST_ROOT}/var/public/ubuntu/dists/noble/main/binary-amd64/Packages.gz" \
+    "${TEST_ROOT}/data/public/ubuntu/dists/noble/main/binary-amd64/Packages.gz" \
     prvaptmirror-test 1.0.0
 package_index_contains \
-    "${TEST_ROOT}/var/public/ubuntu/dists/noble/main/binary-arm64/Packages.gz" \
+    "${TEST_ROOT}/data/public/ubuntu/dists/noble/main/binary-arm64/Packages.gz" \
     prvaptmirror-arm64 1.0.0
 package_index_contains \
-    "${TEST_ROOT}/var/public/ubuntu/dists/noble/main/binary-armhf/Packages.gz" \
+    "${TEST_ROOT}/data/public/ubuntu/dists/noble/main/binary-armhf/Packages.gz" \
     prvaptmirror-armhf 1.0.0
 for architecture in amd64 arm64 armhf; do
     package_index_contains \
-        "${TEST_ROOT}/var/public/ubuntu/dists/noble/main/binary-${architecture}/Packages.gz" \
+        "${TEST_ROOT}/data/public/ubuntu/dists/noble/main/binary-${architecture}/Packages.gz" \
         prvaptmirror-common 1.0.0
 done
 
 repoctl package add ubuntu noble "${TEST_ROOT}/incoming/prvaptmirror-test_2.0.0_amd64.deb"
 package_index_contains \
-    "${TEST_ROOT}/var/public/ubuntu/dists/noble/main/binary-amd64/Packages.gz" \
+    "${TEST_ROOT}/data/public/ubuntu/dists/noble/main/binary-amd64/Packages.gz" \
     prvaptmirror-test 2.0.0
 repoctl rollback ubuntu noble
 package_index_contains \
-    "${TEST_ROOT}/var/public/ubuntu/dists/noble/main/binary-amd64/Packages.gz" \
+    "${TEST_ROOT}/data/public/ubuntu/dists/noble/main/binary-amd64/Packages.gz" \
     prvaptmirror-test 1.0.0
 
 printf 'repoctl 本地真实链路测试通过\n'

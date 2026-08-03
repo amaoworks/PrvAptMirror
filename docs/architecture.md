@@ -74,9 +74,9 @@ repoctl key export
 
 ### `repo-worker`（第二阶段）
 
-`repo-worker` 不暴露端口并使用 `network_mode: none`。它串行读取符合固定 Schema 的任务，重新校验所有参数，然后执行初始化、仓库创建、软件包发布或回滚。
+`repo-worker` 不暴露端口并使用 `network_mode: none`。检查点 2 已实现它的独立容器、最小挂载、健康检查和生命周期；结构化队列消费与仓库业务任务将在后续检查点接入。
 
-只有 Worker 可以读写 Aptly 数据、访问签名私钥并写入公开仓库。Worker 不信任 `admin-web` 传入的路径、文件名、包元数据或命令文本。
+接入业务任务后，只有 Worker 可以读写 Aptly 数据、访问签名私钥并写入公开仓库。Worker 不信任 `admin-web` 传入的路径、文件名、包元数据或命令文本。
 
 ### `repo-web`
 
@@ -84,7 +84,7 @@ repoctl key export
 
 ## 持久化数据
 
-下表使用相对于 `PRVAPTMIRROR_DATA_DIR` 的目标路径。当前实现仍使用项目内 `var/`，统一编排批次会提供显式迁移检查，不会自动覆盖现有数据。
+下表使用相对于 `PRVAPTMIRROR_DATA_DIR` 的路径。默认数据根目录为项目内 `data/`。
 
 | 路径 | 写入者 | 读取者 | 内容 |
 | --- | --- | --- | --- |
@@ -96,7 +96,7 @@ repoctl key export
 | `aptly` | `repoctl`/Worker | `repoctl`/Worker | Aptly 数据库、包池、快照和发布状态 |
 | `gnupg` | `bootstrap`、`repoctl`/Worker | `repoctl`/Worker | 仓库签名私钥环 |
 | `public` | `bootstrap`、`repoctl`/Worker | `repo-web` | 已签名的公开 APT 目录和公钥 |
-| `state` | `bootstrap`、迁移工具 | 所有服务按需只读 | 数据布局版本和初始化状态 |
+| `state` | `bootstrap`、仓库工具 | 所有服务按需只读 | 数据布局版本和初始化状态 |
 
 持久化目录便于备份和迁移。上传临时文件、失败任务和审计日志必须分别设置保留策略；GPG 私钥备份必须加密并存放在 VPS 之外。
 
