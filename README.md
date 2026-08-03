@@ -4,7 +4,7 @@ PrvAptMirror 是一个容器化、带签名的 APT 软件仓库，用于安全�
 
 第一阶段的命令行发布基础已经完成并通过端到端测试。项目当前进入**第二阶段：单管理员 Web 管理**，目标是在浏览器中提供密码登录、软件包上传、仓库管理、签名发布、快照查看和回滚能力。
 
-架构与安全边界参见 [系统架构](docs/architecture.md)，当前阶段范围参见 [单管理员 Web 管理](docs/web-admin.md)，部署和命令行操作参见 [运维与使用说明](docs/operations.md)，后续计划参见 [实施路线](docs/roadmap.md)。
+架构与安全边界参见 [系统架构](docs/architecture.md)，当前阶段范围参见 [单管理员 Web 管理](docs/web-admin.md)，下一批部署设计参见 [统一多容器编排与首次设置](docs/unified-deployment.md)，当前部署和命令行操作参见 [运维与使用说明](docs/operations.md)，后续计划参见 [实施路线](docs/roadmap.md)。
 
 ## 当前能力
 
@@ -17,6 +17,9 @@ PrvAptMirror 是一个容器化、带签名的 APT 软件仓库，用于安全�
 
 ## 当前阶段正在增加
 
+- 一个 Compose 项目和一套统一生命周期命令；
+- `.env` 指定的单一应用数据根目录；
+- 幂等 bootstrap、自动 GPG 初始化和浏览器首次创建管理员密码；
 - 单管理员密码登录和安全会话；
 - 浏览器上传 DEB、预检元数据和计算 SHA-256；
 - 仓库、软件包、快照、公钥和任务状态页面；
@@ -40,6 +43,7 @@ PrvAptMirror 是一个容器化、带签名的 APT 软件仓库，用于安全�
 | `tests/smoke/` | 发布与安装冒烟测试 | 已实现 |
 | `var/` | 本地运行数据，内容禁止提交 | 已实现 |
 | `containers/admin-web/` | 单管理员登录与只读管理概览 | 第二阶段检查点 1 已实现 |
+| `containers/bootstrap/` | 数据目录、首次设置令牌和 GPG 密钥幂等初始化 | 下一检查点范围已定义，尚未实现 |
 | `containers/repo-worker/` | 无网络的串行仓库任务 Worker | 第二阶段计划 |
 | `catalog/` | 上游软件及更新规则 | 第三阶段 |
 | `automation/fetch/` | GitHub、网站和 APT 源抓取器 | 第三阶段 |
@@ -61,4 +65,4 @@ cp .env.example .env
 ./scripts/prvaptmirror up
 ```
 
-第二阶段检查点 1 已实现安全登录和只读仓库概览；上传和 Worker 尚未接入。在完整写操作通过安全测试前，生产发布继续使用 [运维与使用说明](docs/operations.md) 中的命令行流程。
+第二阶段检查点 1 已实现安全登录和只读仓库概览；统一编排、首次 Web 设置、上传和 Worker 尚未接入。在相应功能通过安全测试前，现有部署与生产发布继续使用 [运维与使用说明](docs/operations.md) 中的命令行流程。
