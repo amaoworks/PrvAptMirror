@@ -9,7 +9,7 @@
     </a>
 
     <div class="login-copy">
-      <p class="eyebrow">FIRST RUN · CLAIM ADMIN</p>
+      <p class="eyebrow">SECURE INITIAL SETUP</p>
       <h1 id="setup-heading">创建你的<em>管理凭据。</em></h1>
       <p>系统没有默认密码。请先通过 SSH 执行 <code>./scripts/prvaptmirror setup</code> 获取一次性令牌，再在这里创建管理员密码。</p>
     </div>
@@ -47,12 +47,13 @@
       </label>
       <label>
         <span>管理员密码</span>
-        <input type="password" name="password" required minlength="14" maxlength="1024" autocomplete="new-password">
+        <input type="password" name="password" required minlength="8" maxlength="1024" pattern="(?=.*[a-z])(?=.*[A-Z])(?=.*[0-9]).{8,1024}" title="至少 8 位，并同时包含大写字母、小写字母和数字" autocomplete="new-password">
       </label>
       <label>
         <span>确认管理员密码</span>
-        <input type="password" name="password_confirmation" required minlength="14" maxlength="1024" autocomplete="new-password">
+        <input type="password" name="password_confirmation" required minlength="8" maxlength="1024" pattern="(?=.*[a-z])(?=.*[A-Z])(?=.*[0-9]).{8,1024}" title="至少 8 位，并同时包含大写字母、小写字母和数字" autocomplete="new-password">
       </label>
+      <p class="password-hint">至少 8 位，并同时包含大写字母、小写字母和数字。</p>
       <button class="primary-button" type="submit">
         <span><small>CREATE CREDENTIAL</small><strong>保存并关闭首次设置</strong></span>
         <b aria-hidden="true">→</b>

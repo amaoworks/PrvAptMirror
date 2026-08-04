@@ -117,10 +117,11 @@ button, input { font: inherit; }
 .trace-card > footer { display: flex; gap: 16px; padding: 10px 16px; border-top: 1px solid #31413c; color: #74867f; font-family: var(--font-mono); font-size: 8px; }
 
 .login-form { padding-top: 22px; }
-.form-heading p, .section-heading p, .checkpoint-panel > p { margin: 0; color: var(--cyan); font-family: var(--font-mono); font-size: 9px; font-weight: 800; letter-spacing: .1em; }
+.form-heading p, .section-heading p, .security-panel > p { margin: 0; color: var(--cyan); font-family: var(--font-mono); font-size: 9px; font-weight: 800; letter-spacing: .1em; }
 .form-heading h2 { margin: 5px 0 2px; font-family: var(--font-display); font-size: 29px; }
 .form-heading > span { color: var(--muted); font-size: 12px; }
 .form-alert { margin: 18px 0 -3px; padding: 10px 12px; border-left: 3px solid var(--red); background: var(--red-soft); color: #7e2b25; font-size: 12px; }
+.password-hint { margin: 10px 0 0; color: var(--muted); font-size: 10px; }
 .login-form label { display: grid; gap: 7px; margin-top: 17px; }
 .login-form label > span { color: var(--muted); font-family: var(--font-mono); font-size: 9px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
 .login-form input:not([type="hidden"]) { width: 100%; height: 45px; padding: 0 12px; border: 1px solid var(--line-strong); border-radius: 3px; background: var(--surface); color: var(--ink); }
@@ -189,9 +190,9 @@ button, input { font: inherit; }
 .metric-band small { color: var(--muted); font-size: 11px; }
 
 .content-grid { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(330px, .5fr); gap: 54px; margin-top: 84px; }
-.repository-panel, .checkpoint-panel { min-width: 0; }
+.repository-panel, .security-panel { min-width: 0; }
 .section-heading { display: flex; align-items: end; justify-content: space-between; gap: 28px; margin-bottom: 25px; }
-.section-heading h2, .checkpoint-panel h2 { margin: 4px 0 0; font-family: var(--font-display); font-size: 30px; }
+.section-heading h2, .security-panel h2 { margin: 4px 0 0; font-family: var(--font-display); font-size: 30px; }
 .section-heading > span { max-width: 390px; color: var(--muted); text-align: right; font-size: 11px; }
 .repository-list { margin: 0; padding: 0; border-top: 1px solid var(--ink); list-style: none; }
 .repository-list li { display: grid; min-height: 76px; grid-template-columns: 22px 30px minmax(0, 1fr) 145px; align-items: center; gap: 11px; padding: 10px 8px; border-bottom: 1px solid var(--line); }
@@ -206,14 +207,14 @@ button, input { font: inherit; }
 .empty-state h3 { margin: 8px 0; font-family: var(--font-display); font-size: 25px; }
 .empty-state p { margin: 0; color: var(--muted); font-size: 12px; }
 
-.checkpoint-panel { padding: 27px; border: 1px solid var(--line-strong); background: #fafbf7b3; }
-.checkpoint-panel ol { margin: 24px 0 0; padding: 0; border-top: 1px solid var(--ink); list-style: none; }
-.checkpoint-panel li { display: grid; grid-template-columns: 34px 1fr; gap: 10px; padding: 14px 0; border-bottom: 1px solid var(--line); }
-.checkpoint-panel li > span { display: grid; width: 25px; height: 25px; place-items: center; border: 1px solid var(--line-strong); border-radius: 50%; color: var(--muted); font-family: var(--font-mono); font-size: 8px; }
-.checkpoint-panel li.done > span { border-color: var(--green); background: var(--green); color: white; }
-.checkpoint-panel li div { display: grid; }
-.checkpoint-panel li strong { font-size: 12px; }
-.checkpoint-panel li small { color: var(--muted); font-size: 9px; }
+.security-panel { padding: 27px; border: 1px solid var(--line-strong); background: #fafbf7b3; }
+.security-panel ol { margin: 24px 0 0; padding: 0; border-top: 1px solid var(--ink); list-style: none; }
+.security-panel li { display: grid; grid-template-columns: 34px 1fr; gap: 10px; padding: 14px 0; border-bottom: 1px solid var(--line); }
+.security-panel li > span { display: grid; width: 25px; height: 25px; place-items: center; border: 1px solid var(--line-strong); border-radius: 50%; color: var(--muted); font-family: var(--font-mono); font-size: 8px; }
+.security-panel li.done > span { border-color: var(--green); background: var(--green); color: white; }
+.security-panel li div { display: grid; }
+.security-panel li strong { font-size: 12px; }
+.security-panel li small { color: var(--muted); font-size: 9px; }
 
 .site-footer { display: flex; align-items: center; justify-content: space-between; gap: 30px; padding: 38px max(5vw, 34px); border-top: 1px solid var(--line-strong); background: var(--paper-deep); color: var(--muted); font-size: 10px; }
 .site-footer > div { display: flex; align-items: center; gap: 13px; }
@@ -258,7 +259,7 @@ button, input { font: inherit; }
   .section-heading > span { display: block; margin-top: 8px; text-align: left; }
   .repository-list li { grid-template-columns: 22px 28px minmax(0, 1fr); }
   .repository-list time { display: none; }
-  .checkpoint-panel { padding: 21px; }
+  .security-panel { padding: 21px; }
   .site-footer { display: grid; padding: 30px 20px; }
 }
 

@@ -24,7 +24,7 @@ class AdminWebTest(unittest.TestCase):
         (root / "repository-key.gpg").write_bytes(b"public-key")
 
         password_hasher = PasswordHasher(time_cost=1, memory_cost=1024, parallelism=1)
-        self.password = "correct horse battery staple"
+        self.password = "Correct horse battery staple 1"
         app = create_app(
             {
                 "TESTING": True,
@@ -82,6 +82,7 @@ class AdminWebTest(unittest.TestCase):
         self.assertEqual(login.status_code, 200)
         self.assertIn(b'action="/admin/login"', login.data)
         self.assertIn(b'href="/admin/"', login.data)
+        self.assertNotIn(b"PHASE", login.data)
         self.assertIn("Path=/admin/login", login.headers["Set-Cookie"])
 
         dashboard = self.client.get("/", base_url=ORIGIN, headers=headers)
@@ -97,9 +98,34 @@ class AdminWebTest(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 400)
 
-    def test_login_rejects_wrong_origin(self) -> None:
-        response = self.login(origin="https://attacker.example")
+    def test_login_rejects_wrong_public_host(self) -> None:
+        page = self.client.get("/login", base_url="https://attacker.example")
+        token = self.csrf_from(page)
+        response = self.client.post(
+            "/login",
+            base_url="https://attacker.example",
+            data={
+                "username": "admin",
+                "password": self.password,
+                "csrf_token": token,
+            },
+        )
         self.assertEqual(response.status_code, 403)
+        self.assertIn("登录尚未执行".encode(), response.data)
+
+    def test_login_accepts_trusted_request_origin_fallback(self) -> None:
+        page = self.client.get("/login", base_url=ORIGIN)
+        token = self.csrf_from(page)
+        response = self.client.post(
+            "/login",
+            base_url=ORIGIN,
+            data={
+                "username": "admin",
+                "password": self.password,
+                "csrf_token": token,
+            },
+        )
+        self.assertEqual(response.status_code, 303)
 
     def test_login_rejects_wrong_password(self) -> None:
         response = self.login(password="incorrect password")
@@ -124,6 +150,9 @@ class AdminWebTest(unittest.TestCase):
         dashboard = self.client.get("/", base_url=ORIGIN)
         self.assertEqual(dashboard.status_code, 200)
         self.assertIn(b"lmde/lmde7", dashboard.data)
+        self.assertNotIn(b"PHASE", dashboard.data)
+        self.assertNotIn("检查点".encode(), dashboard.data)
+        self.assertNotIn(b"IMPLEMENTATION TRACE", dashboard.data)
         self.assertIn(b"Content-Security-Policy", str(dashboard.headers).encode())
 
         status = self.client.get("/api/status", base_url=ORIGIN)
@@ -192,7 +221,7 @@ class AdminSetupTest(unittest.TestCase):
         token_path = self.auth_root / "setup-token"
         token_path.write_text(self.setup_token + "\n", encoding="utf-8")
         os.chmod(token_path, 0o600)
-        self.password = "correct horse battery staple"
+        self.password = "Correct horse battery staple 1"
         app = create_app(
             {
                 "TESTING": True,
@@ -268,9 +297,19 @@ class AdminSetupTest(unittest.TestCase):
         self.assertEqual(self.client.get("/setup", base_url=ORIGIN).status_code, 200)
 
     def test_setup_rejects_wrong_origin_and_missing_csrf(self) -> None:
-        self.assertEqual(
-            self.submit_setup(origin="https://attacker.example").status_code, 403
+        page = self.client.get("/setup", base_url="https://attacker.example")
+        csrf_token = self.csrf_from(page)
+        wrong_host = self.client.post(
+            "/setup",
+            base_url="https://attacker.example",
+            data={
+                "setup_token": self.setup_token,
+                "password": self.password,
+                "password_confirmation": self.password,
+                "csrf_token": csrf_token,
+            },
         )
+        self.assertEqual(wrong_host.status_code, 403)
         response = self.client.post(
             "/setup",
             base_url=ORIGIN,
@@ -296,6 +335,12 @@ class AdminSetupTest(unittest.TestCase):
         self.assertEqual(mismatch.status_code, 400)
         short = self.submit_setup(password="too short", confirmation="too short")
         self.assertEqual(short.status_code, 400)
+        no_upper = self.submit_setup(password="lowercase1", confirmation="lowercase1")
+        self.assertEqual(no_upper.status_code, 400)
+        no_lower = self.submit_setup(password="UPPERCASE1", confirmation="UPPERCASE1")
+        self.assertEqual(no_lower.status_code, 400)
+        no_digit = self.submit_setup(password="NoDigitsHere", confirmation="NoDigitsHere")
+        self.assertEqual(no_digit.status_code, 400)
         self.assertTrue((self.auth_root / "setup-token").exists())
 
     def test_setup_is_one_time_and_new_password_can_login(self) -> None:

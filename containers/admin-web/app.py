@@ -27,6 +27,9 @@ SESSION_COOKIE = "__Host-prvaptmirror_admin_session"
 LOGIN_CSRF_COOKIE = "__Secure-prvaptmirror_login_csrf"
 SETUP_CSRF_COOKIE = "__Secure-prvaptmirror_setup_csrf"
 TOKEN_PATTERN = re.compile(r"^[a-z0-9][a-z0-9.+-]*$")
+PASSWORD_UPPER_PATTERN = re.compile(r"[A-Z]")
+PASSWORD_LOWER_PATTERN = re.compile(r"[a-z]")
+PASSWORD_DIGIT_PATTERN = re.compile(r"[0-9]")
 
 
 @dataclass
@@ -205,6 +208,18 @@ def _validate_origin(origin: str, allow_insecure: bool) -> str:
     return f"{parsed.scheme}://{parsed.netloc}"
 
 
+def _password_validation_error(password: str) -> str | None:
+    if not 8 <= len(password) <= 1024:
+        return "密码长度必须在 8 到 1024 个字符之间。"
+    if not PASSWORD_UPPER_PATTERN.search(password):
+        return "密码必须至少包含一个大写英文字母。"
+    if not PASSWORD_LOWER_PATTERN.search(password):
+        return "密码必须至少包含一个小写英文字母。"
+    if not PASSWORD_DIGIT_PATTERN.search(password):
+        return "密码必须至少包含一个数字。"
+    return None
+
+
 def _repository_inventory(root: Path) -> list[dict[str, str | int]]:
     repositories: list[dict[str, str | int]] = []
     if not root.is_dir():
@@ -308,8 +323,24 @@ def create_app(overrides: dict | None = None) -> Flask:
         return f"{request.remote_addr or 'unknown'}:{app.config['ADMIN_USERNAME']}"
 
     def origin_is_valid() -> bool:
-        supplied = request.headers.get("Origin", "")
-        return hmac.compare_digest(supplied, public_origin)
+        # Origin is frequently removed or rewritten by privacy tools and layered
+        # reverse proxies. Validate the effective external scheme/host restored by
+        # the trusted proxy chain instead. State changes still require an
+        # independent unpredictable CSRF token and SameSite=Strict secure cookie.
+        try:
+            request_origin = _validate_origin(
+                request.host_url,
+                app.config["ADMIN_ALLOW_INSECURE_ORIGIN"],
+            )
+        except RuntimeError:
+            return False
+        return hmac.compare_digest(request_origin, public_origin)
+
+    def origin_error_page(page: Callable[..., Response], action: str) -> Response:
+        return page(
+            f"请求来源校验失败，{action}。请使用 ADMIN_PUBLIC_ORIGIN 配置的地址重新打开页面后再提交。",
+            403,
+        )
 
     def append_audit(action: str, result: str) -> None:
         if not audit_root.is_dir() or audit_root.is_symlink():
@@ -428,7 +459,7 @@ def create_app(overrides: dict | None = None) -> Flask:
             return setup_page()
 
         if not origin_is_valid():
-            abort(403, "请求来源无效")
+            return origin_error_page(setup_page, "密码尚未保存")
         supplied_csrf = request.form.get("csrf_token", "")
         cookie_csrf = request.cookies.get(SETUP_CSRF_COOKIE, "")
         if not supplied_csrf or not hmac.compare_digest(supplied_csrf, cookie_csrf):
@@ -455,8 +486,9 @@ def create_app(overrides: dict | None = None) -> Flask:
         confirmation = request.form.get("password_confirmation", "")
         if password != confirmation:
             return setup_page("两次输入的密码不一致。", 400)
-        if not 14 <= len(password) <= 1024:
-            return setup_page("密码长度必须在 14 到 1024 个字符之间。", 400)
+        password_error = _password_validation_error(password)
+        if password_error is not None:
+            return setup_page(password_error, 400)
 
         password_hash = password_hasher.hash(password)
         if not auth_state.complete_setup(supplied_token, password_hash):
@@ -483,7 +515,7 @@ def create_app(overrides: dict | None = None) -> Flask:
             return login_page(message)
 
         if not origin_is_valid():
-            abort(403, "请求来源无效")
+            return origin_error_page(login_page, "登录尚未执行")
         supplied_csrf = request.form.get("csrf_token", "")
         cookie_csrf = request.cookies.get(LOGIN_CSRF_COOKIE, "")
         if not supplied_csrf or not hmac.compare_digest(supplied_csrf, cookie_csrf):

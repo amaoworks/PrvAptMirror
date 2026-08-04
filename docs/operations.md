@@ -68,7 +68,7 @@ REPO_GPG_EXPIRE=2y
 ./scripts/prvaptmirror setup
 ```
 
-命令会显示形如 `https://apt.example.com/admin/setup` 的管理设置地址和一个 64 位十六进制一次性令牌。打开管理页面，输入令牌并创建至少 14 个字符的管理员密码。
+命令会显示形如 `https://apt.example.com/admin/setup` 的管理设置地址和一个 64 位十六进制一次性令牌。打开管理页面，输入令牌并创建至少 8 个字符，且同时包含大写字母、小写字母和数字的管理员密码。
 
 设置成功后：
 

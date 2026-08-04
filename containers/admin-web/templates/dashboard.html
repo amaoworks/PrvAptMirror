@@ -8,9 +8,7 @@
   </a>
   <nav aria-label="主导航">
     <a class="is-current" href="{{ url_for('dashboard') }}">概览</a>
-    <span aria-disabled="true">上传</span>
-    <span aria-disabled="true">仓库</span>
-    <span aria-disabled="true">任务</span>
+    <a href="/">公开仓库</a>
   </nav>
   <form method="post" action="{{ url_for('logout') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -21,9 +19,9 @@
 <main class="dashboard-shell">
   <section class="dashboard-hero">
     <div>
-      <p class="eyebrow">PHASE II · CHECKPOINT 02</p>
+      <p class="eyebrow">SIGNED APT REPOSITORY</p>
       <h1>仓库状态，<em>一眼确认。</em></h1>
-      <p>统一编排和首次设置已经运行：安全登录、会话保护、单一数据目录和公开仓库只读观察。上传与发布任务将在后续检查点接入无网络 Worker。</p>
+      <p>集中查看已发布发行版、签名公钥和服务运行状态。管理入口仅读取公开仓库状态，与高权限签名和发布环境保持隔离。</p>
     </div>
     <aside class="system-card" aria-label="管理服务状态">
       <header><span class="status-dot"></span><strong>ADMIN WEB</strong><small>ONLINE</small></header>
@@ -39,8 +37,8 @@
   <section class="metric-band" aria-label="关键指标">
     <article><span>01</span><strong>{{ data.repository_count }}</strong><small>已发布发行版</small></article>
     <article><span>02</span><strong>{{ 'YES' if data.public_key_ready else 'NO' }}</strong><small>公开签名密钥</small></article>
-    <article><span>03</span><strong>LOCKED</strong><small>高权限写操作</small></article>
-    <article><span>04</span><strong>NEXT</strong><small>上传与预检</small></article>
+    <article><span>03</span><strong>ISOLATED</strong><small>高权限操作</small></article>
+    <article><span>04</span><strong>READ ONLY</strong><small>仓库状态数据</small></article>
   </section>
 
   <section class="content-grid">
@@ -69,15 +67,15 @@
       {% endif %}
     </article>
 
-    <aside class="checkpoint-panel">
-      <p>IMPLEMENTATION TRACE</p>
-      <h2>第二阶段检查点</h2>
+    <aside class="security-panel">
+      <p>SECURITY POSTURE</p>
+      <h2>运行保护</h2>
       <ol>
-        <li class="done"><span>01</span><div><strong>认证与只读概览</strong><small>Argon2id、会话、CSRF、安全头</small></div></li>
-        <li class="done"><span>02</span><div><strong>统一编排与首次设置</strong><small>单一数据目录、bootstrap、一次性令牌</small></div></li>
-        <li><span>03</span><div><strong>安全上传与预检</strong><small>随机文件名、SHA-256、DEB 元数据</small></div></li>
-        <li><span>04</span><div><strong>结构化任务 Worker</strong><small>无网络、串行、高权限隔离</small></div></li>
-        <li><span>05</span><div><strong>发布与回滚</strong><small>二次确认、日志、审计</small></div></li>
+        <li class="done"><span>01</span><div><strong>管理员身份保护</strong><small>Argon2id 密码验证</small></div></li>
+        <li class="done"><span>02</span><div><strong>请求安全校验</strong><small>Origin、CSRF、频率限制</small></div></li>
+        <li class="done"><span>03</span><div><strong>服务端会话</strong><small>Secure、HttpOnly、SameSite</small></div></li>
+        <li class="done"><span>04</span><div><strong>仓库状态只读观察</strong><small>不访问 Aptly 数据库</small></div></li>
+        <li class="done"><span>05</span><div><strong>高权限环境隔离</strong><small>无 Docker Socket 和签名私钥</small></div></li>
       </ol>
     </aside>
   </section>
@@ -85,6 +83,6 @@
 
 <footer class="site-footer">
   <div><span class="brand-mark" aria-hidden="true">A</span><p>公开下载、管理控制与签名执行保持独立权限域。</p></div>
-  <span>PrvAptMirror · Phase II</span>
+  <span>PrvAptMirror</span>
 </footer>
 {% endblock %}

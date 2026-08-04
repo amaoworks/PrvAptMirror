@@ -9,9 +9,9 @@
     </a>
 
     <div class="login-copy">
-      <p class="eyebrow">PHASE II · SINGLE ADMIN</p>
+      <p class="eyebrow">SECURE ADMIN ACCESS</p>
       <h1 id="login-heading">让每一次发布，<em>都有迹可循。</em></h1>
-      <p>上传、校验、签名、快照和回滚将沿同一条受控链路执行。管理入口只创建结构化任务，高权限仓库操作保持隔离。</p>
+      <p>通过受保护的管理员会话查看已发布发行版、签名公钥和服务状态。管理入口与高权限仓库操作保持隔离。</p>
     </div>
 
     <div class="security-strip" aria-label="安全约束">
@@ -30,7 +30,7 @@
         <li><span>03</span><small>argon2</small><code>验证只读密码哈希</code></li>
         <li><span>04</span><small>session</small><code>签发不透明安全会话</code></li>
       </ol>
-      <footer><span>single admin</span><span>server session</span><span>audit ready</span></footer>
+      <footer><span>single admin</span><span>server session</span><span>secure cookie</span></footer>
     </div>
 
     <form class="login-form" method="post" action="{{ url_for('login') }}" autocomplete="on">
