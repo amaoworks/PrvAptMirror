@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}软件包 · PrvAptMirror{% endblock %}
+{% block body %}
+<h1>软件包</h1>
+<div class="card">
+  <form method="post" action="/admin/packages/upload" enctype="multipart/form-data" class="form-block">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>上传 .deb（最多 {{ cfg.max_upload_files }} 个，单次合计 ≤ {{ cfg.max_upload_mb }} MB）</label>
+    <div class="toolbar">
+      <input class="grow" type="file" name="files" accept=".deb" multiple required>
+      <button type="submit">上传并发布</button>
+    </div>
+  </form>
+  {% if request.query_params.get("ok") %}<p class="ok flash">上传已提交。</p>{% endif %}
+  {% if request.query_params.get("deleted") %}<p class="ok flash">已删除并重建索引。</p>{% endif %}
+  {% if request.query_params.get("err") %}<p class="err flash">{{ request.query_params.get("err") }}</p>{% endif %}
+</div>
+<div class="card">
+  <form method="get" action="/admin/packages" class="toolbar form-block">
+    <input class="grow" type="search" name="q" value="{{ q }}" placeholder="搜索包名 / 版本">
+    <select name="arch">
+      <option value="">全部 arch</option>
+      {% for a in cfg.architectures %}
+        <option value="{{ a }}" {% if arch == a %}selected{% endif %}>{{ a }}</option>
+      {% endfor %}
+    </select>
+    <button type="submit">筛选</button>
+  </form>
+  <table>
+    <thead><tr><th>包</th><th>版本</th><th>arch</th><th>状态</th><th>大小</th></tr></thead>
+    <tbody>
+    {% for p in packages %}
+      <tr>
+        <td><a href="/admin/packages/{{ p.id }}">{{ p.name }}</a></td>
+        <td>{{ p.version }}</td>
+        <td>{{ p.architecture }}</td>
+        <td>{{ p.state }}{% if p.state == "missing" %}（重新上传以修复）{% endif %}</td>
+        <td>{{ p.size | humansize }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="5" class="muted">还没有包。上传一个 .deb 开始。</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

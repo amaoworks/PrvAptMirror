@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}{{ pkg.name }} · PrvAptMirror{% endblock %}
+{% block body %}
+<h1>{{ pkg.name }} {{ pkg.version }} ({{ pkg.architecture }})</h1>
+<div class="card">
+  <p>状态 <code>{{ pkg.state }}</code> · SHA256 <code>{{ pkg.sha256 }}</code></p>
+  <p>Filename <code>{{ pkg.filename }}</code> · {{ pkg.size | humansize }}</p>
+  <p>
+    <a class="btn" href="/admin/packages/{{ pkg.id }}/download">下载</a>
+  </p>
+  <h2>control</h2>
+  <table>
+    {% for k, v in control.items() %}
+      <tr><th>{{ k }}</th><td><pre style="background:none;color:inherit;padding:0;margin:0;">{{ v }}</pre></td></tr>
+    {% endfor %}
+  </table>
+</div>
+<div class="card">
+  <h2>删除</h2>
+  <p class="muted">输入包名 <strong>{{ pkg.name }}</strong> 确认。索引会先发布，成功后再删除 pool 文件。</p>
+  {% if request.query_params.get("err") == "confirm" %}<p class="err">确认包名不匹配。</p>{% endif %}
+  <form method="post" action="/admin/packages/{{ pkg.id }}/delete">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>确认包名</label>
+    <input name="confirm_name" required>
+    <button class="danger" type="submit">删除并发布</button>
+  </form>
+</div>
+{% endblock %}

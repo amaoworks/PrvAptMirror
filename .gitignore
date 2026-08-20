@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+data/
+.env
+.env.runtime
+dist/
+build/
+.coverage
+htmlcov/
+*.deb
+!tests/fixtures/
+.DS_Store
+*.log
+*.pid

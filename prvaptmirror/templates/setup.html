@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}客户端接入 · PrvAptMirror{% endblock %}
+{% block body %}
+<h1>客户端接入</h1>
+<div class="card">
+  <p>在 Debian 或 Ubuntu 客户端上将本仓库配置为第三方 apt 源。请使用 <code>Signed-By</code> 绑定仓库公钥，勿使用 <code>trusted=yes</code>，亦勿将公钥写入 <code>/etc/apt/trusted.gpg.d/</code>。</p>
+
+  <div class="panel">
+    <p class="panel-title">路径说明</p>
+    <div class="kv">
+      <span class="k">仓库公钥：</span>
+      <span class="v">从本服务 <code>{{ cfg.apt_base() }}/pubkey.asc</code> 下载，保存到客户端 <code>/etc/apt/keyrings/prvaptmirror.asc</code>（单行格式另需转换成 <code>prvaptmirror.gpg</code>）。</span>
+    </div>
+    <div class="kv">
+      <span class="k">源配置文件：</span>
+      <span class="v">推荐写入 <code>/etc/apt/sources.list.d/prvaptmirror.sources</code>；兼容格式写入 <code>/etc/apt/sources.list.d/prvaptmirror.list</code>。勿直接改动 <code>/etc/apt/sources.list</code> 本体（除非你明确需要）。</span>
+    </div>
+  </div>
+
+  <h2>推荐方式：deb822 源文件</h2>
+  <p class="muted">适用于 Debian 12+、Ubuntu 22.04+。下列命令会创建密钥目录、下载公钥，并写入 <code>prvaptmirror.sources</code>，最后执行 <code>apt update</code>。</p>
+  <pre>{{ deb822 }}</pre>
+
+  <h2>兼容方式：sources.list 单行格式</h2>
+  <p class="muted">适用于仍使用传统 <code>deb</code> 单行语法的客户端。公钥先下载为 ASCII 文件，再用 <code>gpg --dearmor</code> 转为二进制 <code>.gpg</code>，源条目写入 <code>prvaptmirror.list</code>。</p>
+  <pre>{{ oneline }}</pre>
+</div>
+{% endblock %}
