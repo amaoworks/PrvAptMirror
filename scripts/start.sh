@@ -14,7 +14,7 @@ ACCESS="local"
 URL=""
 PASSWORD="${PRVAPT_ADMIN_PASSWORD:-}"
 ACTION="up"
-BUILD=1
+BUILD=0
 ENGINE=""          # docker | dev
 ORIGIN_CHECK=0
 
@@ -36,7 +36,7 @@ PrvAptMirror 一键启动（只暴露应用端口，反代交给宿主机）
   -P, --password PASS     管理员密码
       --origin-check      打开 Origin/Referer 地址校验（默认关闭）
   -u, --url URL           覆盖 apt 片段里的 origin
-      --no-build          Docker 时不 --build
+      --build             Docker 时从当前源码构建（默认从 GHCR 拉取镜像）
   -h, --help              帮助
 
 示例:
@@ -101,7 +101,8 @@ while [ $# -gt 0 ]; do
     -P|--password) PASSWORD="${2:-}"; shift 2 ;;
     --origin-check|--verify-origin|--verify-addr) ORIGIN_CHECK=1; shift ;;
     -u|--url) URL="${2:-}"; shift 2 ;;
-    --no-build) BUILD=0; shift ;;
+    --build) BUILD=1; shift ;;
+    --no-build) BUILD=0; shift ;; # 兼容旧用法；现在已是默认行为
     -h|--help) usage; exit 0 ;;
     *) die "未知参数: $1  （./scripts/start.sh --help）" ;;
   esac
@@ -122,6 +123,16 @@ compose() {
     docker compose --env-file "$RUNTIME" "$@"
   else
     docker compose "$@"
+  fi
+}
+
+compose_local_build() {
+  if [ -f "$RUNTIME" ]; then
+    docker compose --env-file "$RUNTIME" \
+      -f "$ROOT/docker-compose.yml" -f "$ROOT/docker-compose.build.yml" "$@"
+  else
+    docker compose \
+      -f "$ROOT/docker-compose.yml" -f "$ROOT/docker-compose.build.yml" "$@"
   fi
 }
 
@@ -215,6 +226,7 @@ fi
 umask 077
 {
   echo "PRVAPT_HOST_DATA=$ROOT/data"
+  echo "PRVAPT_IMAGE=${PRVAPT_IMAGE:-ghcr.io/amaoworks/prvaptmirror:latest}"
   echo "PRVAPT_BIND_HOST=$BIND_HOST"
   echo "PRVAPT_PORT=$PORT"
   echo "PRVAPT_PUBLIC_URL=$PUBLIC_URL"
@@ -292,8 +304,12 @@ wait_health() {
 if [ "$ENGINE" = docker ]; then
   have_compose || die "没有 Docker Compose。改用: ./scripts/start.sh --dev ..."
   args=(up -d --force-recreate --remove-orphans)
-  if [ "$BUILD" = 1 ]; then args+=(--build); fi
-  compose "${args[@]}"
+  if [ "$BUILD" = 1 ]; then
+    args+=(--build)
+    compose_local_build "${args[@]}"
+  else
+    compose "${args[@]}"
+  fi
   if ! wait_health; then
     echo "健康检查超时，最近日志：" >&2
     compose logs --tail=80 app >&2 || true

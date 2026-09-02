@@ -1,7 +1,8 @@
 # App only. TLS / reverse proxy belongs on the host.
 services:
   app:
-    build: .
+    image: ${PRVAPT_IMAGE:-ghcr.io/amaoworks/prvaptmirror:latest}
+    pull_policy: always
     user: "1000:1000"
     ports:
       - "${PRVAPT_BIND_HOST:-127.0.0.1}:${PRVAPT_PORT:-8000}:8000"

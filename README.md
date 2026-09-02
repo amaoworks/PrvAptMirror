@@ -8,7 +8,7 @@ The process **only exposes one HTTP port**. TLS, domain names, and access contro
 
 ## One-click start
 
-With Docker, `--docker` runs the app container by default; `--dev` uses local uvicorn. Origin checks are off by default.
+With Docker, `--docker` pulls the published GHCR image by default; `--dev` uses local uvicorn. Origin checks are off by default.
 
 ```bash
 chmod +x scripts/start.sh
@@ -24,6 +24,7 @@ chmod +x scripts/start.sh
 | `--local` | Bind `127.0.0.1` only; print local URLs |
 | `--public` | Bind `0.0.0.0`; print local and NIC URLs |
 | `--dev` / `--docker` | Local uvicorn or Docker app container |
+| `--build` | Build the Docker image from the current source instead of pulling GHCR |
 | `-P` / `--password` | Admin password |
 | `--origin-check` | Enable address verification (off by default) |
 
@@ -32,7 +33,14 @@ Manual Compose:
 ```bash
 mkdir -p data && sudo chown 1000:1000 data
 cp .env.example .env   # optional: set PRVAPT_ADMIN_PASSWORD
-docker compose up --build
+docker compose pull
+docker compose up -d
+```
+
+`.env.example` pins the `0.0.1` image. Change `PRVAPT_IMAGE` explicitly when upgrading. To build locally instead:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.build.yml up --build
 ```
 
 - Admin: http://127.0.0.1:8000/admin/
@@ -40,6 +48,10 @@ docker compose up --build
 - If `PRVAPT_ADMIN_PASSWORD` is empty, the generated password is written to `data/admin-bootstrap.txt` (mode 0600). Change it on first login.
 
 Put Caddy / Traefik / host nginx in front of that port if you need HTTPS.
+
+## Container releases
+
+Pushing to `main` publishes `edge` and `sha-*` images. Pushing a semantic Git tag such as `v0.0.1` publishes release tags (`0.0.1`, `0.0`, `0`) and updates `latest`. Released full-version tags must not be overwritten. Production deployments should pin the full version instead of using `latest`.
 
 ## Without Docker
 

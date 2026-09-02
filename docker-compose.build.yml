@@ -1,0 +1,6 @@
+# Optional local image build. The default compose file pulls the GHCR image.
+services:
+  app:
+    image: prvaptmirror:local
+    build: .
+    pull_policy: never

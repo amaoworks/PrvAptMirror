@@ -8,7 +8,7 @@
 
 ## 一键启动
 
-有 Docker 时默认 `--docker` 只跑 app 容器；`--dev` 使用本机 uvicorn。Origin 地址校验默认关闭。
+有 Docker 时，`--docker` 默认拉取已发布的 GHCR 镜像；`--dev` 使用本机 uvicorn。Origin 地址校验默认关闭。
 
 ```bash
 chmod +x scripts/start.sh
@@ -24,6 +24,7 @@ chmod +x scripts/start.sh
 | `--local` | 仅监听 `127.0.0.1`，打印本机地址 |
 | `--public` | 监听 `0.0.0.0`，打印本机和各网卡地址 |
 | `--dev` / `--docker` | 本机 uvicorn 或 Docker app 容器 |
+| `--build` | 从当前源码构建 Docker 镜像，而不是从 GHCR 拉取 |
 | `-P` / `--password` | 管理员密码 |
 | `--origin-check` | 打开地址校验（默认关闭） |
 
@@ -32,7 +33,14 @@ chmod +x scripts/start.sh
 ```bash
 mkdir -p data && sudo chown 1000:1000 data
 cp .env.example .env   # 可选：设置 PRVAPT_ADMIN_PASSWORD
-docker compose up --build
+docker compose pull
+docker compose up -d
+```
+
+`.env.example` 默认固定到 `0.0.1` 镜像，升级时请明确修改 `PRVAPT_IMAGE`。如需从本地源码构建：
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.build.yml up --build
 ```
 
 - 后台：http://127.0.0.1:8000/admin/
@@ -40,6 +48,10 @@ docker compose up --build
 - 若未设置 `PRVAPT_ADMIN_PASSWORD`，初始密码会写入 `data/admin-bootstrap.txt`（权限 0600）。首次登录后请修改密码。
 
 如需 HTTPS，可在宿主机用 Caddy / Traefik / nginx 反代到该端口。
+
+## 容器版本发布
+
+推送到 `main` 会发布 `edge` 和 `sha-*` 镜像；推送 `v0.0.1` 这样的语义化 Git Tag，会发布正式版本标签（`0.0.1`、`0.0`、`0`）并更新 `latest`。已经发布的完整版本标签不得覆盖；生产环境应固定完整版本号，不建议直接使用 `latest`。
 
 ## 不使用 Docker
 
