@@ -12,7 +12,7 @@ router = APIRouter()
 
 @router.get("/healthz")
 def healthz(request: Request):
-    cfg = request.app.state.cfg
+    cfg = request.state.cfg
     conn = connect(cfg)
     try:
         conn.execute("SELECT 1").fetchone()
@@ -23,7 +23,7 @@ def healthz(request: Request):
 
 @router.get("/readyz")
 def readyz(request: Request):
-    cfg = request.app.state.cfg
+    cfg = request.state.cfg
     conn = connect(cfg)
     try:
         fpr = get_setting(conn, "gpg_fingerprint")

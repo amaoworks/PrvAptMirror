@@ -160,3 +160,141 @@ def test_setup_snippet_no_trusted_yes(client):
     assert "trusted=yes" not in text
     assert "apt-key add" not in text
     assert "trusted.gpg.d" not in text
+
+
+def test_settings_update_runtime_values_and_republish(client):
+    login(client)
+    page = client.get("/admin/settings")
+    assert page.status_code == 200
+    assert "公开 URL" in page.text
+    token = _csrf(page.text)
+    values = {
+        "csrf_token": token,
+        "public_url": "https://apt.example.com",
+        "suite": "stable",
+        "codename": "stable",
+        "component": "main",
+        "architectures": "amd64,arm64,all",
+        "origin": "PrvAptMirror",
+        "label": "prvapt",
+        "max_upload_mb": "256",
+        "max_upload_files": "10",
+        "session_days": "14",
+    }
+    saved = client.post(
+        "/admin/settings",
+        data=values,
+        headers=ORIGIN_HEADERS,
+        follow_redirects=False,
+    )
+    assert saved.status_code == 303, saved.text
+    assert "https://apt.example.com/apt" in client.get("/admin/setup").text
+
+    page = client.get("/admin/settings")
+    values.update(
+        {
+            "csrf_token": _csrf(page.text),
+            "suite": "testing",
+            "codename": "bookworm",
+            "origin": "Private Repository",
+            "confirm_repository_change": "yes",
+        }
+    )
+    republished = client.post(
+        "/admin/settings",
+        data=values,
+        headers=ORIGIN_HEADERS,
+        follow_redirects=False,
+    )
+    assert republished.status_code == 303, republished.text
+    inrelease = client.get("/apt/dists/testing/InRelease")
+    assert inrelease.status_code == 200
+    assert "Suite: testing" in inrelease.text
+    assert "Codename: bookworm" in inrelease.text
+    assert "Origin: Private Repository" in inrelease.text
+
+
+def test_settings_reject_repository_change_without_confirmation(client):
+    login(client)
+    page = client.get("/admin/settings")
+    response = client.post(
+        "/admin/settings",
+        data={
+            "csrf_token": _csrf(page.text),
+            "public_url": ORIGIN,
+            "suite": "testing",
+            "codename": "testing",
+            "component": "main",
+            "architectures": "amd64,arm64,all",
+            "origin": "PrvAptMirror",
+            "label": "prvapt",
+            "max_upload_mb": "512",
+            "max_upload_files": "20",
+            "session_days": "7",
+        },
+        headers=ORIGIN_HEADERS,
+    )
+    assert response.status_code == 400
+    assert "请勾选确认" in response.text
+
+
+def test_settings_roll_back_when_republish_fails(client, monkeypatch):
+    from prvaptmirror.models import PublishResult
+    from prvaptmirror.routes import admin as admin_routes
+
+    login(client)
+    calls = 0
+
+    def fail_then_recover(cfg, conn):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return PublishResult(ok=False, error="simulated signing failure")
+        return PublishResult(ok=True)
+
+    monkeypatch.setattr(admin_routes, "publish_unlocked", fail_then_recover)
+    page = client.get("/admin/settings")
+    response = client.post(
+        "/admin/settings",
+        data={
+            "csrf_token": _csrf(page.text),
+            "public_url": ORIGIN,
+            "suite": "broken-release",
+            "codename": "stable",
+            "component": "main",
+            "architectures": "amd64,arm64,all",
+            "origin": "PrvAptMirror",
+            "label": "prvapt",
+            "max_upload_mb": "512",
+            "max_upload_files": "20",
+            "session_days": "7",
+            "confirm_repository_change": "yes",
+        },
+        headers=ORIGIN_HEADERS,
+    )
+    assert response.status_code == 500
+    assert "设置已回滚" in response.text
+    assert calls == 2
+    settings = client.get("/admin/settings")
+    assert 'name="suite" type="text" required value="stable"' in settings.text
+
+
+def test_startup_recovers_interrupted_settings_publish(ready):
+    from fastapi.testclient import TestClient
+
+    from prvaptmirror.db import connect, get_setting, set_setting
+    from prvaptmirror.main import create_app
+    from prvaptmirror.settings import SETTINGS_PENDING_KEY, ensure_app_settings
+
+    conn = connect(ready)
+    ensure_app_settings(conn, ready)
+    set_setting(conn, SETTINGS_PENDING_KEY, "1")
+    conn.close()
+
+    app = create_app(ready)
+    with TestClient(app, base_url=ORIGIN) as recovered:
+        assert recovered.get("/readyz").status_code == 200
+
+    conn = connect(ready)
+    assert get_setting(conn, SETTINGS_PENDING_KEY) == "0"
+    conn.close()

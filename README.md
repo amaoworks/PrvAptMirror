@@ -25,14 +25,14 @@ chmod +x scripts/start.sh
 | `--public` | Bind `0.0.0.0`; print local and NIC URLs |
 | `--dev` / `--docker` | Local uvicorn or Docker app container |
 | `--build` | Build the Docker image from the current source instead of pulling GHCR |
-| `-P` / `--password` | Admin password |
+| `-P` / `--password` | First-start admin password; never overrides later UI changes |
 | `--origin-check` | Enable address verification (off by default) |
 
 Manual Compose:
 
 ```bash
 mkdir -p data && sudo chown 1000:1000 data
-cp .env.example .env   # optional: set PRVAPT_ADMIN_PASSWORD
+cp .env.example .env
 docker compose pull
 docker compose up -d
 ```
@@ -45,9 +45,21 @@ docker compose -f docker-compose.yml -f docker-compose.build.yml up --build
 
 - Admin: http://127.0.0.1:8000/admin/
 - Apt: http://127.0.0.1:8000/apt/
-- If `PRVAPT_ADMIN_PASSWORD` is empty, the generated password is written to `data/admin-bootstrap.txt` (mode 0600). Change it on first login.
+- When no initial password is specified, the generated password is written to `data/admin-bootstrap.txt` (mode 0600) and must be changed on first login.
 
 Put Caddy / Traefik / host nginx in front of that port if you need HTTPS.
+
+## Web settings
+
+After login, use **Settings** to manage the public URL, Suite, Codename, Component, architectures, Origin, Label, upload limits, and new-session lifetime. On the first start, environment-backed application values only seed the database; saved web settings are authoritative afterward. Repository metadata changes rebuild and re-sign the indexes with rollback protection; an interrupted change is reconciled on the next start.
+
+The image version, host data directory, bind address, port, trusted proxies, and secrets remain deployment settings. `.env.example` therefore contains only four deployment values.
+
+To recover a forgotten administrator password from an interactive terminal:
+
+```bash
+docker compose exec app prvaptmirror-admin reset-password --username admin
+```
 
 ## Container releases
 
@@ -59,8 +71,6 @@ Pushing to `main` publishes `edge` and `sha-*` images. Pushing a semantic Git ta
 python3 -m venv .venv
 .venv/bin/pip install -e ".[dev]"
 export PRVAPT_DATA_DIR=$PWD/data
-export PRVAPT_ADMIN_PASSWORD=change-me-now
-export PRVAPT_PUBLIC_URL=http://127.0.0.1:8000
 .venv/bin/uvicorn prvaptmirror.main:app --host 127.0.0.1 --port 8000 --workers 1
 ```
 

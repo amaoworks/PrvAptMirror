@@ -25,14 +25,14 @@ chmod +x scripts/start.sh
 | `--public` | 监听 `0.0.0.0`，打印本机和各网卡地址 |
 | `--dev` / `--docker` | 本机 uvicorn 或 Docker app 容器 |
 | `--build` | 从当前源码构建 Docker 镜像，而不是从 GHCR 拉取 |
-| `-P` / `--password` | 管理员密码 |
+| `-P` / `--password` | 首次启动的管理员密码，不会在重启时覆盖网站密码 |
 | `--origin-check` | 打开地址校验（默认关闭） |
 
 手动使用 Compose：
 
 ```bash
 mkdir -p data && sudo chown 1000:1000 data
-cp .env.example .env   # 可选：设置 PRVAPT_ADMIN_PASSWORD
+cp .env.example .env
 docker compose pull
 docker compose up -d
 ```
@@ -45,9 +45,21 @@ docker compose -f docker-compose.yml -f docker-compose.build.yml up --build
 
 - 后台：http://127.0.0.1:8000/admin/
 - apt 源：http://127.0.0.1:8000/apt/
-- 若未设置 `PRVAPT_ADMIN_PASSWORD`，初始密码会写入 `data/admin-bootstrap.txt`（权限 0600）。首次登录后请修改密码。
+- 未显式指定首次密码时，生成的初始密码会写入 `data/admin-bootstrap.txt`（权限 0600），首次登录后必须修改。
 
 如需 HTTPS，可在宿主机用 Caddy / Traefik / nginx 反代到该端口。
+
+## 网站设置
+
+登录后可在 **设置** 页面管理公开 URL、Suite、Codename、Component、架构、Origin、Label、上传限制和新会话期限。首次启动时环境变量中的业务参数只用于初始化数据库，此后以网站保存的设置为准。修改仓库元数据会自动重建并重新签名索引；失败时设置会回滚，中途崩溃则在下次启动时恢复一致状态。
+
+镜像版本、宿主机数据目录、绑定地址、端口、可信代理和密钥仍由部署环境管理。`.env.example` 因此只保留四个部署参数。
+
+如果忘记管理员密码，可在交互式终端中重置：
+
+```bash
+docker compose exec app prvaptmirror-admin reset-password --username admin
+```
 
 ## 容器版本发布
 
@@ -59,8 +71,6 @@ docker compose -f docker-compose.yml -f docker-compose.build.yml up --build
 python3 -m venv .venv
 .venv/bin/pip install -e ".[dev]"
 export PRVAPT_DATA_DIR=$PWD/data
-export PRVAPT_ADMIN_PASSWORD=change-me-now
-export PRVAPT_PUBLIC_URL=http://127.0.0.1:8000
 .venv/bin/uvicorn prvaptmirror.main:app --host 127.0.0.1 --port 8000 --workers 1
 ```
 

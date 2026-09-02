@@ -12,30 +12,40 @@ from fastapi.staticfiles import StaticFiles
 
 from prvaptmirror.auth import bootstrap_admin
 from prvaptmirror.config import ensure_data_dirs, load_config, validate_startup
-from prvaptmirror.db import connect, init_db
+from prvaptmirror.db import connect, get_setting, init_db, set_setting
 from prvaptmirror.events import emit
-from prvaptmirror.publish import startup_reconcile
+from prvaptmirror.publish import publish_lock, publish_unlocked, startup_reconcile
 from prvaptmirror.routes.admin import router as admin_router
 from prvaptmirror.routes.health import router as health_router
 from prvaptmirror.signing import SigningError, ensure_key
 from prvaptmirror.storage import gc_incoming
+from prvaptmirror.settings import SETTINGS_PENDING_KEY, ensure_app_settings, load_app_config
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    cfg = app.state.cfg
-    validate_startup(cfg)
-    ensure_data_dirs(cfg)
-    conn = init_db(cfg)
+    base_cfg = app.state.base_cfg
+    validate_startup(base_cfg)
+    ensure_data_dirs(base_cfg)
+    conn = init_db(base_cfg)
     try:
+        ensure_app_settings(conn, base_cfg)
+        cfg = load_app_config(base_cfg, conn)
+        app.state.cfg = cfg
         bootstrap_admin(cfg, conn)
         try:
             ensure_key(cfg, conn)
         except SigningError as exc:
             emit("gpg_bootstrap_fail", error=str(exc))
             raise
+        if get_setting(conn, SETTINGS_PENDING_KEY, "0") == "1":
+            with publish_lock(cfg):
+                recovery = publish_unlocked(cfg, conn)
+            if not recovery.ok:
+                raise RuntimeError(f"pending settings recovery failed: {recovery.error}")
+            set_setting(conn, SETTINGS_PENDING_KEY, "0")
         gc_incoming(cfg)
         startup_reconcile(cfg, conn)
     finally:
@@ -46,7 +56,18 @@ async def lifespan(app: FastAPI):
 def create_app(cfg=None) -> FastAPI:
     cfg = cfg or load_config()
     app = FastAPI(title="PrvAptMirror", docs_url=None, redoc_url=None, lifespan=lifespan)
+    app.state.base_cfg = cfg
     app.state.cfg = cfg
+
+    @app.middleware("http")
+    async def app_settings_snapshot(request, call_next):
+        conn = connect(app.state.base_cfg)
+        try:
+            request.state.cfg = load_app_config(app.state.base_cfg, conn)
+        finally:
+            conn.close()
+        return await call_next(request)
+
     app.include_router(health_router)
     app.include_router(admin_router, prefix="/admin")
     app.mount("/admin/static", StaticFiles(directory=str(STATIC_DIR)), name="admin-static")

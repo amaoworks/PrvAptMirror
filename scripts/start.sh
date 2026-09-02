@@ -33,9 +33,9 @@ PrvAptMirror 一键启动（只暴露应用端口，反代交给宿主机）
   -a, --access MODE       local | public（同上）
       --dev               本机 uvicorn
       --docker            Docker 只跑 app 并映射端口（默认：有 Compose 就用 Docker）
-  -P, --password PASS     管理员密码
+  -P, --password PASS     首次启动的管理员密码（之后不会覆盖网站改密）
       --origin-check      打开 Origin/Referer 地址校验（默认关闭）
-  -u, --url URL           覆盖 apt 片段里的 origin
+  -u, --url URL           首次启动时写入网站的公开 URL
       --build             Docker 时从当前源码构建（默认从 GHCR 拉取镜像）
   -h, --help              帮助
 

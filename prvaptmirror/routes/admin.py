@@ -36,14 +36,31 @@ from prvaptmirror.db import (
     get_setting,
     last_publish_row,
     list_packages,
+    set_setting,
+    transaction,
 )
 from prvaptmirror.debparse import DebParseError, parse_deb
 from prvaptmirror.events import emit
 from prvaptmirror.models import User
-from prvaptmirror.publish import delete_commit, publish, upload_commit
+from prvaptmirror.publish import (
+    delete_commit,
+    publish,
+    publish_lock,
+    publish_unlocked,
+    upload_commit,
+)
 from prvaptmirror.ratelimit import client_ip, cookie_secure_flag, is_locked, record_attempt
 from prvaptmirror.snippets import deb822_snippet, oneline_snippet
 from prvaptmirror.storage import DiskFullError, disk_preflight, write_incoming_stream
+from prvaptmirror.settings import (
+    SettingsValidationError,
+    SETTINGS_PENDING_KEY,
+    app_setting_values,
+    config_from_app_values,
+    load_app_config,
+    repository_settings_changed,
+    save_app_config,
+)
 
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
@@ -73,7 +90,7 @@ router = APIRouter()
 
 
 def _cfg(request: Request) -> Config:
-    return request.app.state.cfg
+    return request.state.cfg
 
 
 def _csrf_expected(request: Request, user: User | None) -> str:
@@ -342,6 +359,139 @@ def setup(request: Request):
     )
     _attach_csrf(request, response, user)
     return response
+
+
+def _settings_response(
+    request: Request,
+    user: User,
+    values: dict[str, str],
+    *,
+    error: str | None = None,
+    status_code: int = 200,
+):
+    response = templates.TemplateResponse(
+        request,
+        "settings.html",
+        _flash_ctx(
+            request,
+            user,
+            _csrf_expected(request, user),
+            {
+                "values": values,
+                "error": error,
+                "saved": request.query_params.get("saved") == "1",
+            },
+        ),
+        status_code=status_code,
+    )
+    _attach_csrf(request, response, user)
+    return response
+
+
+@router.get("/settings", response_class=HTMLResponse)
+def settings_get(request: Request):
+    user = current_user(request)
+    if user is None:
+        return RedirectResponse("/admin/login", status_code=303)
+    if user.must_change_password:
+        return RedirectResponse("/admin/password", status_code=303)
+    return _settings_response(request, user, app_setting_values(_cfg(request)))
+
+
+class _SettingsPublishFailure(RuntimeError):
+    pass
+
+
+@router.post("/settings")
+async def settings_post(
+    request: Request,
+    csrf_token: Annotated[str, Form()] = "",
+    public_url: Annotated[str, Form()] = "",
+    suite: Annotated[str, Form()] = "",
+    codename: Annotated[str, Form()] = "",
+    component: Annotated[str, Form()] = "",
+    architectures: Annotated[str, Form()] = "",
+    origin: Annotated[str, Form()] = "",
+    label: Annotated[str, Form()] = "",
+    max_upload_mb: Annotated[str, Form()] = "",
+    max_upload_files: Annotated[str, Form()] = "",
+    session_days: Annotated[str, Form()] = "",
+    confirm_repository_change: Annotated[str, Form()] = "",
+):
+    user = current_user(request)
+    if user is None:
+        return RedirectResponse("/admin/login", status_code=303)
+    current = _cfg(request)
+    expected = _csrf_expected(request, user)
+    if not verify_csrf(request, current, csrf_token, expected):
+        return HTMLResponse("CSRF 校验失败", status_code=403)
+    if user.must_change_password:
+        return RedirectResponse("/admin/password", status_code=303)
+
+    values = {
+        "public_url": public_url,
+        "suite": suite,
+        "codename": codename,
+        "component": component,
+        "architectures": architectures,
+        "origin": origin,
+        "label": label,
+        "max_upload_mb": max_upload_mb,
+        "max_upload_files": max_upload_files,
+        "session_days": session_days,
+    }
+    try:
+        candidate = config_from_app_values(request.app.state.base_cfg, values)
+    except (SettingsValidationError, RuntimeError) as exc:
+        return _settings_response(request, user, values, error=str(exc), status_code=400)
+
+    if repository_settings_changed(current, candidate) and confirm_repository_change != "yes":
+        return _settings_response(
+            request,
+            user,
+            values,
+            error="仓库元数据发生变化，请勾选确认后再保存",
+            status_code=400,
+        )
+
+    def work() -> str | None:
+        base = request.app.state.base_cfg
+        conn = connect(base)
+        try:
+            before = load_app_config(base, conn)
+            if not repository_settings_changed(before, candidate):
+                with transaction(conn):
+                    save_app_config(conn, candidate)
+                return None
+
+            with publish_lock(before):
+                set_setting(conn, SETTINGS_PENDING_KEY, "1")
+                try:
+                    result = publish_unlocked(candidate, conn)
+                    if not result.ok:
+                        raise _SettingsPublishFailure(result.error or "索引重建失败")
+                    with transaction(conn):
+                        save_app_config(conn, candidate)
+                        set_setting(conn, SETTINGS_PENDING_KEY, "0")
+                except Exception as exc:
+                    try:
+                        recovery = publish_unlocked(before, conn)
+                    except Exception as recovery_exc:
+                        return f"{exc}；旧配置索引恢复也失败：{recovery_exc}"
+                    if not recovery.ok:
+                        return f"{exc}；旧配置索引恢复也失败：{recovery.error}"
+                    set_setting(conn, SETTINGS_PENDING_KEY, "0")
+                    return f"{exc}；设置已回滚"
+            return None
+        finally:
+            conn.close()
+
+    loop = asyncio.get_running_loop()
+    error = await loop.run_in_executor(None, work)
+    if error:
+        return _settings_response(request, user, values, error=error, status_code=500)
+    request.app.state.cfg = candidate
+    return RedirectResponse("/admin/settings?saved=1", status_code=303)
 
 
 @router.get("/packages", response_class=HTMLResponse)

@@ -46,7 +46,7 @@ def test_origin_check_off_by_default(cfg):
     assert verify_csrf(_request(None), cfg, "tok", "tok") is True
 
 
-def test_env_password_syncs_existing_admin(tmp_path, monkeypatch):
+def test_env_password_never_overrides_existing_admin(tmp_path, monkeypatch):
     monkeypatch.setenv("PRVAPT_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("PRVAPT_SECRET_KEY", "s" * 48)
     monkeypatch.setenv("PRVAPT_ADMIN_USER", "admin")
@@ -64,8 +64,29 @@ def test_env_password_syncs_existing_admin(tmp_path, monkeypatch):
     cfg2 = load_config()
     conn = init_db(cfg2)
     bootstrap_admin(cfg2, conn)
+    assert authenticate(conn, "admin", "first-password-ok") is not None
+    assert authenticate(conn, "admin", "second-password-ok") is None
+    conn.close()
+
+
+def test_admin_cli_resets_password(tmp_path, monkeypatch):
+    monkeypatch.setenv("PRVAPT_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("PRVAPT_SECRET_KEY", "s" * 48)
+    monkeypatch.setenv("PRVAPT_ADMIN_USER", "admin")
+    monkeypatch.setenv("PRVAPT_ADMIN_PASSWORD", "first-password-ok")
+    from prvaptmirror.admin_cli import reset_password
+    from prvaptmirror.auth import authenticate, bootstrap_admin
+    from prvaptmirror.db import init_db
+
+    cfg = load_config()
+    conn = init_db(cfg)
+    bootstrap_admin(cfg, conn)
+    conn.close()
+
+    reset_password(cfg, "admin", "recovered-password")
+    conn = init_db(cfg)
     assert authenticate(conn, "admin", "first-password-ok") is None
-    assert authenticate(conn, "admin", "second-password-ok") is not None
+    assert authenticate(conn, "admin", "recovered-password") is not None
     conn.close()
 
 

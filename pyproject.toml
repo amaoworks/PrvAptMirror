@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "prvaptmirror"
-version = "0.0.1"
+version = "0.0.2"
 description = "Personal signed apt repository with a password-protected admin UI"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -28,6 +28,7 @@ dev = [
 
 [project.scripts]
 prvaptmirror = "prvaptmirror.main:cli"
+prvaptmirror-admin = "prvaptmirror.admin_cli:cli"
 
 [tool.setuptools.packages.find]
 include = ["prvaptmirror*"]

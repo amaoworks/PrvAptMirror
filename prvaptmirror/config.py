@@ -1,4 +1,4 @@
-"""Environment-driven configuration."""
+"""Deployment configuration and first-boot application defaults."""
 
 from __future__ import annotations
 
@@ -123,10 +123,10 @@ def _ensure_secret(data_dir: Path) -> str:
 def load_config(environ: dict[str, str] | None = None) -> Config:
     env = os.environ if environ is None else environ
     data_dir = Path(env.get("PRVAPT_DATA_DIR", "/var/lib/prvaptmirror")).resolve()
-    public_url = env.get("PRVAPT_PUBLIC_URL", "http://127.0.0.1:8080").rstrip("/")
+    public_url = env.get("PRVAPT_PUBLIC_URL", "http://127.0.0.1:8000").rstrip("/")
     origins = env.get(
         "PRVAPT_ADMIN_ORIGINS",
-        "http://127.0.0.1:8080,http://localhost:8080",
+        "http://127.0.0.1:8000,http://localhost:8000",
     )
     cidrs_raw = env.get(
         "PRVAPT_TRUSTED_PROXY_CIDRS",

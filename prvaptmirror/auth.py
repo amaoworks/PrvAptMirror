@@ -70,29 +70,10 @@ def bootstrap_admin(cfg: Config, conn) -> None:
             (cfg.admin_user, hash_password(password), must_change, iso(_utcnow())),
         )
         return
-    # Start script --password is ignored unless we sync: the first user already exists.
-    if not cfg.admin_password:
-        return
-    user = get_user_by_username(conn, cfg.admin_user)
-    if user is None:
-        conn.execute(
-            """
-            INSERT INTO users (username, password_hash, must_change_password, created_at)
-            VALUES (?, ?, ?, ?)
-            """,
-            (cfg.admin_user, hash_password(cfg.admin_password), 0, iso(_utcnow())),
-        )
-        emit("admin_created", user=cfg.admin_user)
-        return
-    if verify_password(user.password_hash, cfg.admin_password):
-        return
-    conn.execute(
-        "UPDATE users SET password_hash = ?, must_change_password = 0 WHERE id = ?",
-        (hash_password(cfg.admin_password), user.id),
-    )
-    conn.execute("DELETE FROM sessions WHERE user_id = ?", (user.id,))
-    conn.execute("DELETE FROM login_attempts")
-    emit("admin_password_synced", user=user.username)
+    # Bootstrap credentials are intentionally ignored after the first account
+    # exists. Keeping an environment variable must never undo a UI password
+    # change on restart.
+    return
 
 
 def create_session(conn, user: User, *, days: int, ip: str | None, user_agent: str | None) -> str:
