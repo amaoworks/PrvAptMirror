@@ -219,8 +219,13 @@ case "$PUBLIC_URL" in
 esac
 
 mkdir -p "$ROOT/data"
-if [ "$(id -u)" = 0 ]; then
-  chown 1000:1000 "$ROOT/data" 2>/dev/null || true
+if find "$ROOT/data" -xdev ! -uid 1000 -print -quit 2>/dev/null | grep -q .; then
+  if [ "$(id -u)" = 0 ]; then
+    echo "正在迁移 data 目录所有权到容器用户 1000:1000 ..."
+    chown -R 1000:1000 "$ROOT/data"
+  else
+    die "data 中有非 UID 1000 的文件。请先执行: sudo chown -R 1000:1000 '$ROOT/data'"
+  fi
 fi
 
 umask 077
