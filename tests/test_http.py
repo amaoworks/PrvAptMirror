@@ -31,6 +31,9 @@ def login(client) -> None:
 
 def test_login_without_origin_when_check_off(client):
     page = client.get("/admin/login")
+    assert 'class="login-form"' in page.text
+    assert 'name="username" type="text"' in page.text
+    assert 'name="password" type="password"' in page.text
     token = _csrf(page.text)
     resp = client.post(
         "/admin/login",
