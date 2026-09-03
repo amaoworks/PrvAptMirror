@@ -1,9 +1,12 @@
 {% extends "base.html" %}
 {% block title %}设置 · PrvAptMirror{% endblock %}
 {% block body %}
-<h1>设置</h1>
-{% if saved %}<p class="ok">设置已保存。</p>{% endif %}
-{% if error %}<p class="err">{{ error }}</p>{% endif %}
+<div class="page-title-row">
+  <h1>设置</h1>
+</div>
+
+{% if saved %}<p class="ok flash">设置已保存。</p>{% endif %}
+{% if error %}<p class="err flash">{{ error }}</p>{% endif %}
 
 <form class="settings-form" method="post" action="/admin/settings">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -13,35 +16,37 @@
     <label for="public_url">公开 URL</label>
     <input id="public_url" name="public_url" type="text" required
            value="{{ values.public_url }}" placeholder="https://apt.example.com">
-    <p class="muted">用于生成客户端接入命令。</p>
+    <p class="form-hint muted">用于生成客户端接入命令。</p>
   </div>
 
   <div class="card">
     <h2>APT 仓库</h2>
-    <div class="row">
-      <div style="flex:1;min-width:180px">
+    <div class="form-grid-3">
+      <div>
         <label for="suite">Suite</label>
         <input id="suite" name="suite" type="text" required value="{{ values.suite }}">
       </div>
-      <div style="flex:1;min-width:180px">
+      <div>
         <label for="codename">Codename</label>
         <input id="codename" name="codename" type="text" required value="{{ values.codename }}">
       </div>
-      <div style="flex:1;min-width:180px">
+      <div>
         <label for="component">Component</label>
         <input id="component" name="component" type="text" required value="{{ values.component }}">
       </div>
     </div>
+
     <label for="architectures">架构</label>
     <input id="architectures" name="architectures" type="text" required
            value="{{ values.architectures }}" placeholder="amd64,arm64,all">
-    <p class="muted">英文逗号分隔；移除后不再进入索引。</p>
-    <div class="row">
-      <div style="flex:1;min-width:220px">
+    <p class="form-hint muted">英文逗号分隔；移除后不再进入索引。</p>
+
+    <div class="form-grid-2">
+      <div>
         <label for="origin">Origin</label>
         <input id="origin" name="origin" type="text" required value="{{ values.origin }}">
       </div>
-      <div style="flex:1;min-width:220px">
+      <div>
         <label for="label">Label</label>
         <input id="label" name="label" type="text" required value="{{ values.label }}">
       </div>
@@ -50,18 +55,18 @@
 
   <div class="card">
     <h2>运行限制</h2>
-    <div class="row">
-      <div style="flex:1;min-width:180px">
+    <div class="form-grid-3">
+      <div>
         <label for="max_upload_mb">单次上传上限（MB）</label>
         <input id="max_upload_mb" name="max_upload_mb" type="number" min="1" max="10240"
                required value="{{ values.max_upload_mb }}">
       </div>
-      <div style="flex:1;min-width:180px">
+      <div>
         <label for="max_upload_files">单次文件数</label>
         <input id="max_upload_files" name="max_upload_files" type="number" min="1" max="100"
                required value="{{ values.max_upload_files }}">
       </div>
-      <div style="flex:1;min-width:180px">
+      <div>
         <label for="session_days">新会话有效期（天）</label>
         <input id="session_days" name="session_days" type="number" min="1" max="365"
                required value="{{ values.session_days }}">
@@ -70,11 +75,12 @@
   </div>
 
   <div class="card">
-    <label style="display:flex;gap:.6rem;align-items:flex-start">
+    <label class="checkbox-label">
       <input name="confirm_repository_change" type="checkbox" value="yes">
       <span>修改仓库元数据后立即重建索引。</span>
     </label>
-    <button type="submit">保存设置</button>
+    <button type="submit" style="margin-top: 0.75rem;">保存设置</button>
   </div>
 </form>
 {% endblock %}
+

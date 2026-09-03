@@ -1,42 +1,53 @@
 {% extends "base.html" %}
 {% block title %}{{ "编辑" if source else "新增" }}软件来源 · PrvAptMirror{% endblock %}
 {% block body %}
-<h1>{{ "编辑" if source else "新增" }}软件来源</h1>
-{% if request.query_params.get("created") %}<p class="ok">来源已创建。</p>{% endif %}
-{% if request.query_params.get("saved") %}<p class="ok">来源设置已保存。</p>{% endif %}
-{% if request.query_params.get("queued") %}<p class="ok">已加入同步队列。</p>{% endif %}
-{% if request.query_params.get("err") == "disabled" %}<p class="err">来源已停用或正在同步。</p>{% endif %}
-{% if request.query_params.get("err") == "running" %}<p class="err">来源正在同步，暂时不能删除。</p>{% endif %}
-{% if error %}<p class="err">{{ error }}</p>{% endif %}
+<div style="margin-bottom: 0.75rem;">
+  <a href="/admin/sources" style="color: var(--muted); text-decoration: none; font-size: 0.88rem;">← 返回软件来源列表</a>
+</div>
+<div class="page-title-row">
+  <h1>{{ "编辑" if source else "新增" }}软件来源</h1>
+</div>
+
+{% if request.query_params.get("created") %}<p class="ok flash">来源已创建。</p>{% endif %}
+{% if request.query_params.get("saved") %}<p class="ok flash">来源设置已保存。</p>{% endif %}
+{% if request.query_params.get("queued") %}<p class="ok flash">已加入同步队列。</p>{% endif %}
+{% if request.query_params.get("err") == "disabled" %}<p class="err flash">来源已停用或正在同步。</p>{% endif %}
+{% if request.query_params.get("err") == "running" %}<p class="err flash">来源正在同步，暂时不能删除。</p>{% endif %}
+{% if error %}<p class="err flash">{{ error }}</p>{% endif %}
 
 <form class="settings-form" method="post" action="{{ '/admin/sources/' ~ source.id if source else '/admin/sources' }}">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <div class="card">
-    <label for="name">来源名称</label>
-    <input id="name" name="name" type="text" required maxlength="80" value="{{ values.name }}">
-
-    <label for="kind">来源类型</label>
-    <select id="kind" name="kind">
-      <option value="github_release" {% if values.kind == "github_release" %}selected{% endif %}>GitHub Releases</option>
-      <option value="direct_url" {% if values.kind == "direct_url" %}selected{% endif %}>固定 .deb 下载地址</option>
-    </select>
+    <div class="form-grid-2">
+      <div>
+        <label for="name">来源名称</label>
+        <input id="name" name="name" type="text" required maxlength="80" value="{{ values.name }}" placeholder="例如：MyPackage Releases">
+      </div>
+      <div>
+        <label for="kind">来源类型</label>
+        <select id="kind" name="kind">
+          <option value="github_release" {% if values.kind == "github_release" %}selected{% endif %}>GitHub Releases</option>
+          <option value="direct_url" {% if values.kind == "direct_url" %}selected{% endif %}>固定 .deb 下载地址</option>
+        </select>
+      </div>
+    </div>
 
     <label for="location">GitHub 仓库或下载地址</label>
     <input id="location" name="location" type="text" required value="{{ values.location }}"
            placeholder="owner/repository 或 https://example.com/package.deb">
-    <p class="muted">GitHub 填写 <code>owner/repository</code>；固定地址填写完整 URL。</p>
+    <p class="form-hint muted">GitHub 填写 <code>owner/repository</code>；固定地址填写完整 URL。</p>
 
     <label for="asset_pattern">GitHub Asset 匹配表达式</label>
     <input id="asset_pattern" name="asset_pattern" type="text" required value="{{ values.asset_pattern }}"
            placeholder=".*_(amd64|arm64)\.deb$">
-    <p class="muted">仅下载匹配正则的 <code>.deb</code> 文件；固定地址无需设置。</p>
+    <p class="form-hint muted">仅下载匹配正则的 <code>.deb</code> 文件；固定地址无需设置。</p>
 
-    <div class="row">
-      <div style="flex:1;min-width:180px">
+    <div class="form-grid-2">
+      <div>
         <label for="interval_minutes">检查间隔（分钟）</label>
         <input id="interval_minutes" name="interval_minutes" type="number" min="5" max="10080" required value="{{ values.interval_minutes }}">
       </div>
-      <div style="flex:1;min-width:180px">
+      <div>
         <label for="release_limit">检查最近 Release 数量</label>
         <input id="release_limit" name="release_limit" type="number" min="1" max="20" required value="{{ values.release_limit }}">
       </div>
@@ -45,38 +56,44 @@
     <label for="token">GitHub Token（可选）</label>
     <input id="token" name="token" type="password" autocomplete="new-password" value=""
            placeholder="{{ '已配置；留空则保持不变' if token_configured else '公开仓库通常可以留空' }}">
-    <p class="muted">用于私有仓库或提高 API 限额；保存后不再显示。</p>
-    {% if token_configured %}
-      <label style="display:flex;gap:.6rem;align-items:center">
-        <input name="clear_token" type="checkbox" value="yes"> 清除已保存的 Token
-      </label>
-    {% endif %}
+    <p class="form-hint muted">用于私有仓库或提高 API 限额；保存后不再显示。</p>
 
-    <label style="display:flex;gap:.6rem;align-items:center">
-      <input name="include_prereleases" type="checkbox" value="yes" {% if values.include_prereleases == "yes" %}checked{% endif %}>
-      GitHub 来源包含 prerelease
-    </label>
-    <label style="display:flex;gap:.6rem;align-items:center">
-      <input name="enabled" type="checkbox" value="yes" {% if values.enabled == "yes" %}checked{% endif %}>
-      启用自动检查
-    </label>
-    <button type="submit">{{ "保存来源" if source else "创建来源" }}</button>
+    <div style="margin-top: 1rem; padding-top: 0.75rem; border-top: 1px solid var(--line-subtle);">
+      {% if token_configured %}
+        <label class="checkbox-label">
+          <input name="clear_token" type="checkbox" value="yes"> 清除已保存的 Token
+        </label>
+      {% endif %}
+
+      <label class="checkbox-label">
+        <input name="include_prereleases" type="checkbox" value="yes" {% if values.include_prereleases == "yes" %}checked{% endif %}>
+        GitHub 来源包含 prerelease
+      </label>
+      <label class="checkbox-label">
+        <input name="enabled" type="checkbox" value="yes" {% if values.enabled == "yes" %}checked{% endif %}>
+        启用自动检查
+      </label>
+    </div>
+
+    <div style="margin-top: 1.25rem;">
+      <button type="submit">{{ "保存来源" if source else "创建来源" }}</button>
+    </div>
   </div>
 </form>
 
 {% if source %}
 <div class="card">
   <h2>运行状态</h2>
-  <div class="kv"><span class="k">状态：</span><span class="v">{{ source.last_status | status_label }}</span></div>
+  <div class="kv"><span class="k">状态：</span><span class="v"><span class="badge {% if source.last_status == 'success' %}badge-ok{% elif source.last_status == 'error' %}badge-err{% elif source.last_status == 'running' %}badge-warn{% else %}badge-mute{% endif %}">{{ source.last_status | status_label }}</span></span></div>
   <div class="kv"><span class="k">上次检查：</span><span class="v">{{ source.last_checked_at or "—" }}</span></div>
   <div class="kv"><span class="k">下次检查：</span><span class="v">{{ source.next_check_at if source.enabled else "—" }}</span></div>
-  {% if source.last_error %}<p class="err">{{ source.last_error }}</p>{% endif %}
-  <div class="toolbar" style="margin-top:1rem">
-    <form method="post" action="/admin/sources/{{ source.id }}/sync">
+  {% if source.last_error %}<p class="err flash">{{ source.last_error }}</p>{% endif %}
+  <div class="toolbar" style="margin-top:1.25rem">
+    <form method="post" action="/admin/sources/{{ source.id }}/sync" style="margin:0;">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <button type="submit" {% if not source.enabled or source.last_status == "running" %}disabled{% endif %}>立即同步</button>
     </form>
-    <form method="post" action="/admin/sources/{{ source.id }}/delete" onsubmit="return confirm('删除此来源？已导入的软件包不会删除。')">
+    <form method="post" action="/admin/sources/{{ source.id }}/delete" style="margin:0;" onsubmit="return confirm('删除此来源？已导入的软件包不会删除。')">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <button class="danger" type="submit" {% if source.last_status == "running" %}disabled{% endif %}>删除来源</button>
     </form>
@@ -85,26 +102,63 @@
 
 <div class="card">
   <h2>最近同步</h2>
-  <table>
-    <thead><tr><th>开始时间</th><th>状态</th><th>发现</th><th>下载</th><th>导入</th><th>跳过</th></tr></thead>
-    <tbody>
-    {% for run in runs %}
-      <tr><td>{{ run["started_at"] }}</td><td>{{ run["status"] | status_label }}{% if run["error"] %}<br><span class="err">{{ run["error"] }}</span>{% endif %}</td><td>{{ run["discovered"] }}</td><td>{{ run["downloaded"] }}</td><td>{{ run["imported"] }}</td><td>{{ run["skipped"] }}</td></tr>
-    {% else %}<tr><td colspan="6" class="muted">尚无同步记录。</td></tr>{% endfor %}
-    </tbody>
-  </table>
+  <div class="table-responsive">
+    <table>
+      <thead>
+        <tr>
+          <th style="width: 25%;">开始时间</th>
+          <th style="width: 20%;">状态</th>
+          <th style="width: 14%;">发现</th>
+          <th style="width: 14%;">下载</th>
+          <th style="width: 14%;">导入</th>
+          <th style="width: 13%;">跳过</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for run in runs %}
+        <tr>
+          <td>{{ run["started_at"] }}</td>
+          <td>{{ run["status"] | status_label }}{% if run["error"] %}<br><span class="err" style="font-size:0.8rem;">{{ run["error"] }}</span>{% endif %}</td>
+          <td>{{ run["discovered"] }}</td>
+          <td>{{ run["downloaded"] }}</td>
+          <td>{{ run["imported"] }}</td>
+          <td>{{ run["skipped"] }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="6" class="muted" style="text-align:center; padding: 1.5rem 1rem;">尚无同步记录。</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
 </div>
 
 <div class="card">
   <h2>最近发现的文件</h2>
-  <table>
-    <thead><tr><th>文件</th><th>状态</th><th>大小</th><th>完成时间</th></tr></thead>
-    <tbody>
-    {% for item in artifacts %}
-      <tr><td>{{ item["filename"] }}</td><td>{{ item["status"] | status_label }}{% if item["error"] %}<br><span class="err">{{ item["error"] }}</span>{% endif %}</td><td>{{ item["size"] | humansize if item["size"] is not none else "—" }}</td><td>{{ item["finished_at"] or "—" }}</td></tr>
-    {% else %}<tr><td colspan="4" class="muted">尚未发现文件。</td></tr>{% endfor %}
-    </tbody>
-  </table>
+  <div class="table-responsive">
+    <table>
+      <thead>
+        <tr>
+          <th style="width: 40%;">文件</th>
+          <th style="width: 20%;">状态</th>
+          <th style="width: 15%;">大小</th>
+          <th style="width: 25%;">完成时间</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for item in artifacts %}
+        <tr>
+          <td><code>{{ item["filename"] }}</code></td>
+          <td>{{ item["status"] | status_label }}{% if item["error"] %}<br><span class="err" style="font-size:0.8rem;">{{ item["error"] }}</span>{% endif %}</td>
+          <td>{{ item["size"] | humansize if item["size"] is not none else "—" }}</td>
+          <td>{{ item["finished_at"] or "—" }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="4" class="muted" style="text-align:center; padding: 1.5rem 1rem;">尚未发现文件。</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
 </div>
 {% endif %}
 {% endblock %}
+

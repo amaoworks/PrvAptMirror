@@ -1,17 +1,20 @@
 {% extends "base.html" %}
 {% block title %}登录 · PrvAptMirror{% endblock %}
 {% block body %}
-<div class="card" style="max-width:420px;margin:3rem auto;">
-  <h1>登录</h1>
-  <p class="muted">个人apt仓库后台</p>
-  {% if error %}<p class="err">{{ error }}</p>{% endif %}
+<div class="card" style="max-width: 400px; margin: 3.5rem auto 4rem; padding: 2rem 2.2rem; box-shadow: 0 4px 12px rgba(0,0,0,0.06);">
+  <h1 style="font-size: 1.45rem; margin-bottom: 0.25rem;">管理员登录</h1>
+  <p class="muted" style="margin-top: 0; margin-bottom: 1.25rem;">个人apt仓库后台</p>
+  {% if error %}<p class="err flash" style="margin-top:0; margin-bottom: 1rem;">{{ error }}</p>{% endif %}
   <form class="login-form" method="post" action="/admin/login">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <label for="username">用户名</label>
-    <input id="username" name="username" type="text" autocomplete="username" required>
+    <input id="username" name="username" type="text" autocomplete="username" placeholder="输入管理员用户名" required>
     <label for="password">密码</label>
-    <input id="password" name="password" type="password" autocomplete="current-password" required>
-    <p><button type="submit">登录</button></p>
+    <input id="password" name="password" type="password" autocomplete="current-password" placeholder="输入密码" required>
+    <div style="margin-top: 1.5rem;">
+      <button type="submit" style="width: 100%;">登录系统</button>
+    </div>
   </form>
 </div>
 {% endblock %}
+
