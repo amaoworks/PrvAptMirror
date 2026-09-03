@@ -18,6 +18,7 @@ from prvaptmirror.publish import publish_lock, publish_unlocked, startup_reconci
 from prvaptmirror.routes.admin import router as admin_router
 from prvaptmirror.routes.health import router as health_router
 from prvaptmirror.signing import SigningError, ensure_key
+from prvaptmirror.source_sync import SourceScheduler
 from prvaptmirror.storage import gc_incoming
 from prvaptmirror.settings import SETTINGS_PENDING_KEY, ensure_app_settings, load_app_config
 
@@ -50,7 +51,13 @@ async def lifespan(app: FastAPI):
         startup_reconcile(cfg, conn)
     finally:
         conn.close()
-    yield
+    scheduler = SourceScheduler(base_cfg)
+    app.state.source_scheduler = scheduler
+    await scheduler.start()
+    try:
+        yield
+    finally:
+        await scheduler.stop()
 
 
 def create_app(cfg=None) -> FastAPI:

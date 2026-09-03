@@ -10,7 +10,7 @@ from pathlib import Path
 from prvaptmirror.config import Config
 from prvaptmirror.models import PackageRow, User
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 MIGRATIONS: dict[int, str] = {
     1: """
@@ -79,7 +79,68 @@ CREATE TABLE login_attempts (
 
 CREATE INDEX idx_login_ip_at ON login_attempts(ip, at);
 INSERT INTO settings(key, value) VALUES ('publish_dirty', '0');
-"""
+""",
+    2: """
+CREATE TABLE package_sources (
+  id                   INTEGER PRIMARY KEY,
+  name                 TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  kind                 TEXT NOT NULL CHECK(kind IN ('github_release', 'direct_url')),
+  location             TEXT NOT NULL,
+  asset_pattern        TEXT NOT NULL DEFAULT '.*\\.deb$',
+  interval_minutes     INTEGER NOT NULL DEFAULT 30,
+  release_limit        INTEGER NOT NULL DEFAULT 1,
+  include_prereleases  INTEGER NOT NULL DEFAULT 0,
+  enabled              INTEGER NOT NULL DEFAULT 1,
+  token_encrypted      TEXT,
+  created_at           TEXT NOT NULL,
+  updated_at           TEXT NOT NULL,
+  next_check_at        TEXT NOT NULL,
+  last_checked_at      TEXT,
+  last_status          TEXT NOT NULL DEFAULT 'never',
+  last_error           TEXT,
+  consecutive_failures INTEGER NOT NULL DEFAULT 0,
+  http_etag            TEXT,
+  http_last_modified   TEXT
+);
+
+CREATE INDEX idx_package_sources_due
+  ON package_sources(enabled, next_check_at);
+
+CREATE TABLE source_runs (
+  id          INTEGER PRIMARY KEY,
+  source_id   INTEGER NOT NULL REFERENCES package_sources(id) ON DELETE CASCADE,
+  started_at  TEXT NOT NULL,
+  finished_at TEXT,
+  status      TEXT NOT NULL,
+  discovered  INTEGER NOT NULL DEFAULT 0,
+  downloaded  INTEGER NOT NULL DEFAULT 0,
+  imported    INTEGER NOT NULL DEFAULT 0,
+  skipped     INTEGER NOT NULL DEFAULT 0,
+  error       TEXT
+);
+
+CREATE INDEX idx_source_runs_source_started
+  ON source_runs(source_id, started_at DESC);
+
+CREATE TABLE source_artifacts (
+  id            INTEGER PRIMARY KEY,
+  source_id     INTEGER NOT NULL REFERENCES package_sources(id) ON DELETE CASCADE,
+  external_id   TEXT NOT NULL,
+  filename      TEXT NOT NULL,
+  remote_url    TEXT NOT NULL,
+  size          INTEGER,
+  sha256        TEXT,
+  package_id    INTEGER REFERENCES packages(id) ON DELETE SET NULL,
+  status        TEXT NOT NULL DEFAULT 'pending',
+  first_seen_at TEXT NOT NULL,
+  finished_at   TEXT,
+  error         TEXT,
+  UNIQUE(source_id, external_id)
+);
+
+CREATE INDEX idx_source_artifacts_source
+  ON source_artifacts(source_id, id DESC);
+""",
 }
 
 

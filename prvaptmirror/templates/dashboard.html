@@ -4,7 +4,7 @@
 <h1>仪表盘</h1>
 <div class="row">
   <div class="card stat"><div class="muted">软件包</div><h2>{{ counts.total }}</h2></div>
-  <div class="card stat"><div class="muted">active</div><h2>{{ counts.active }}</h2></div>
+  <div class="card stat"><div class="muted">有效</div><h2>{{ counts.active }}</h2></div>
   <div class="card stat"><div class="muted">仓库体积</div><h2>{{ counts.bytes | humansize }}</h2></div>
   <div class="card stat"><div class="muted">磁盘剩余</div><h2>{{ disk_free | humansize }}</h2></div>
 </div>
@@ -15,12 +15,12 @@
   </div>
   <div class="panel">
     <p class="panel-title">发布状态</p>
-    <div class="kv"><span class="k">publish_dirty：</span><span class="v"><code>{{ dirty }}</code></span></div>
+    <div class="kv"><span class="k">待发布：</span><span class="v">{{ "是" if dirty == "1" else "否" }}</span></div>
     <div class="kv">
       <span class="k">上次发布：</span>
       <span class="v">
         {% if last %}
-          {{ last["status"] }} @ {{ last["finished_at"] or last["started_at"] }}
+          {{ last["status"] | status_label }} · {{ last["finished_at"] or last["started_at"] }}
           {% if last["duration_ms"] is not none %}（{{ last["duration_ms"] }} ms）{% endif %}
         {% else %}
           （尚无记录）
@@ -31,7 +31,7 @@
   {% if counts.missing %}<p class="err">有 {{ counts.missing }} 个包文件缺失，请重新上传以修复。</p>{% endif %}
   {% if counts.pending_delete %}<p class="muted">有 {{ counts.pending_delete }} 个包正在删除。</p>{% endif %}
   {% if skipped %}
-    <p class="err">以下包的 Architecture 不在当前 PRVAPT_ARCHS，发布时已跳过：
+    <p class="err">以下软件包架构不在当前设置中，已跳过：
       {% for p in skipped %}{{ p.name }} {{ p.version }} {{ p.architecture }}{% if not loop.last %}、{% endif %}{% endfor %}
     </p>
   {% endif %}

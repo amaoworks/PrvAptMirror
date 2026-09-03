@@ -55,6 +55,27 @@ docker compose -f docker-compose.yml -f docker-compose.build.yml up --build
 
 镜像版本、宿主机数据目录、绑定地址、端口、可信代理和密钥仍由部署环境管理。`.env.example` 因此只保留四个部署参数。
 
+## 自动软件来源
+
+后台的 **软件来源** 页面可配置自动下载，不需要增加容器或外部来源配置文件。调度器运行在同一个 Uvicorn 进程内，来源定义、调度时间、运行历史和发现的文件全部保存在 `data.sqlite`。
+
+目前支持两种来源：
+
+- **GitHub Releases**：填写 `owner/repository`、Asset 文件名正则、检查最近几个 Release、是否包含 prerelease，以及检查间隔。只下载同时匹配规则且以 `.deb` 结尾的 Asset。
+- **固定下载地址**：定期访问一个 HTTP(S) 地址。远端支持时使用 `ETag` 和 `Last-Modified` 条件请求，并使用内容摘要避免重复导入。
+
+每个来源都可在网页中新增、编辑、启用、停用、删除或“立即同步”。下载内容会流式写入 `data/incoming`，通过 Debian 软件包校验后整批导入，最后只重建和签名一次索引。完全相同的软件包会跳过；如果 Package、Version、Architecture 相同但内容摘要不同，会显示冲突，不会静默覆盖。检查失败会进行指数退避重试，最长不超过来源设置的正常检查间隔。
+
+GitHub Token 为可选项，可用于私有仓库或提高 API 限额。Token 在写入数据库前会加密，之后不会在页面回显。加密密钥由 `data/secret-key` 派生，因此迁移或恢复时必须让它与 `data.sqlite` 一起保留。
+
+现有目录映射会让全部内容在升级镜像或重建容器后继续存在：
+
+```text
+./data:/var/lib/prvaptmirror
+```
+
+项目不会额外构建 Worker 镜像或启动 Worker 服务：网站、定时调度、下载、软件包导入和 APT 发布都在唯一的 `app` 容器中运行。
+
 如果忘记管理员密码，可在交互式终端中重置：
 
 ```bash
@@ -94,4 +115,4 @@ export PRVAPT_DATA_DIR=$PWD/data
 docker compose exec app /app/scripts/backup.sh /tmp/prvapt-backup
 ```
 
-`scripts/backup.sh` 依赖镜像内的 `sqlite3`，会备份 `data.sqlite`、`repo/pool` 与 `gnupg/`。恢复前请先停掉应用（`scripts/restore.sh`）。
+`scripts/backup.sh` 依赖镜像内的 `sqlite3`，会备份 `data.sqlite`、`repo/pool`、`gnupg/` 与 `secret-key`。备份中包含签名私钥和来源凭据的加密密钥，应按敏感文件保存。恢复前请先停掉应用（`scripts/restore.sh`）。

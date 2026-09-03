@@ -11,6 +11,8 @@
 
 > **落地变更（2026-08-20）**：仓库不再内置 nginx。进程同时提供 `/admin/` 与 `/apt/`，Compose 只映射应用端口；TLS / 域名 / 访问控制交给宿主机反代。下文里 in-compose nginx、sibling `alias`、`nginx/nginx.conf` 视为已废弃。
 
+> **落地变更（2026-09-02）**：单个 `app` 容器内置自动来源调度器。来源通过后台管理并持久化到 SQLite，当前支持 GitHub Releases 与固定 HTTP(S) `.deb` 地址；不增加 Worker 容器或外部来源配置文件。
+
 ---
 
 ## Overview
@@ -96,6 +98,17 @@ PrvAptMirror 是一个跑在单台 VPS / 家用 NAS / Tailscale 节点上的**�
 | K12 | 进程模型 | **单 worker**。`fcntl.flock` **只**在 executor 线程里拿一次：`publish()` = `with lock: publish_unlocked()`。上传/删除/启动各是一个同步函数，内部拿锁、改 DB、调 `publish_unlocked()`、成功再 unlink。`async def` **禁止**持锁。用 `asyncio.get_running_loop().run_in_executor` | Linux `flock` 对两个 FD **不递归**；事件循环上持锁再 `run_in_executor(publish)` 会死锁并堵住 `/healthz` |
 | K13 | 变更顺序 | **先 `publish_unlocked()` 再生效删除**：pool 对象只在本轮 `publish_runs.status=success` 之后 `unlink`。删除与发布共享同一次加锁 | 否则旧 `Packages` 指向已删 blob；二次 `flock` 会死锁 |
 | K14 | 写路由 | **任何 mutating `/admin` 路由都要求已登录**；`PRVAPT_INSECURE_NO_AUTH=1` 仅当 `PUBLIC_URL` 为 loopback 才允许启动 | 防止 `main` 在认证合入前变成未认证上传面 |
+| K15 | 自动来源 | **单容器内置调度器**；来源、运行记录与远端文件状态存 SQLite，网页管理；首批适配 GitHub Releases 和固定 URL | 个人单机仓库不需要额外 Worker 服务；复用下载暂存、`.deb` 校验、发布锁与原子索引流程，映射 `data/` 即可完整持久化 |
+
+### 自动软件来源
+
+`package_sources` 保存来源类型、地址、Asset 正则、Release 范围、检查间隔、启停状态、下一次执行时间、HTTP validators 和最近结果；`source_runs` 保存每次同步的统计与错误；`source_artifacts` 使用来源内的远端标识去重，并关联成功导入的 `packages` 行。三张表均随 `data.sqlite` 位于宿主机映射目录。
+
+FastAPI lifespan 启动一个 `SourceScheduler` asyncio task。它通过 `asyncio.to_thread` 执行网络下载、解析和发布等同步工作，因此不阻塞 HTTP event loop；部署继续固定 Uvicorn `--workers 1`，避免多个进程重复调度。退出时等待当前同步安全结束。应用异常退出留下的 `running` 任务会在下一次启动时标记为中断并立即重试。
+
+GitHub 来源调用 Releases API，跳过 draft，按设置决定是否包含 prerelease，只检查最近 N 个 Release，并用正则选择 `.deb` Asset。固定 URL 保存 `ETag`/`Last-Modified` 并发送条件请求。两类来源最终都流式写入 `incoming/`、执行现有 `.deb` 解析与架构白名单检查，并把本批次交给一次 `upload_commit()`，从而只获取一次发布锁并只签名一次索引。
+
+来源 Token 由持久化 `secret-key` 派生的 Fernet 密钥加密后存入 SQLite，网页不回显。备份必须包含 `data.sqlite`、`secret-key`、`repo/pool` 与 `gnupg/`；整个备份均按敏感材料处理。
 
 ---
 

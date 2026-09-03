@@ -8,7 +8,8 @@ if [ -z "$DEST" ]; then
 fi
 mkdir -p "$DEST"
 sqlite3 "$DATA_DIR/data.sqlite" ".backup $DEST/data.sqlite"
-tar --exclude=repo/dists -C "$DATA_DIR" -czf "$DEST/pool-and-meta.tgz" repo/pool gnupg
+tar --exclude=repo/dists --exclude='gnupg/S.*' \
+  -C "$DATA_DIR" -czf "$DEST/pool-and-meta.tgz" repo/pool gnupg secret-key
 {
   echo "packages=$(sqlite3 "$DATA_DIR/data.sqlite" "select count(*) from packages")"
   echo "fingerprint=$(sqlite3 "$DATA_DIR/data.sqlite" "select value from settings where key='gpg_fingerprint'")"

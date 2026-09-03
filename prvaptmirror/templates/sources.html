@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}软件来源 · PrvAptMirror{% endblock %}
+{% block body %}
+<div class="toolbar" style="margin-bottom:1rem">
+  <h1 style="margin:0" class="grow">软件来源</h1>
+  <a class="btn" href="/admin/sources/new">新增来源</a>
+</div>
+{% if request.query_params.get("deleted") %}<p class="ok">来源已删除，软件包保留。</p>{% endif %}
+<div class="card">
+  <table>
+    <thead><tr><th>名称</th><th>类型</th><th>状态</th><th>上次检查</th><th>下次检查</th></tr></thead>
+    <tbody>
+    {% for source in sources %}
+      <tr>
+        <td><a href="/admin/sources/{{ source.id }}">{{ source.name }}</a></td>
+        <td>{{ "GitHub Releases" if source.kind == "github_release" else "固定下载地址" }}</td>
+        <td>
+          {% if not source.enabled %}已停用
+          {% elif source.last_status == "error" %}<span class="err">失败</span>
+          {% elif source.last_status == "running" %}同步中
+          {% elif source.last_status == "queued" %}等待同步
+          {% elif source.last_status == "success" %}<span class="ok">正常</span>
+          {% else %}尚未检查{% endif %}
+        </td>
+        <td>{{ source.last_checked_at or "—" }}</td>
+        <td>{{ source.next_check_at if source.enabled else "—" }}</td>
+      </tr>
+    {% else %}
+      <tr><td colspan="5" class="muted">还没有自动抓取来源。</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

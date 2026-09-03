@@ -19,7 +19,7 @@
   <form method="get" action="/admin/packages" class="toolbar form-block">
     <input class="grow" type="search" name="q" value="{{ q }}" placeholder="搜索包名 / 版本">
     <select name="arch">
-      <option value="">全部 arch</option>
+      <option value="">全部架构</option>
       {% for a in cfg.architectures %}
         <option value="{{ a }}" {% if arch == a %}selected{% endif %}>{{ a }}</option>
       {% endfor %}
@@ -27,18 +27,18 @@
     <button type="submit">筛选</button>
   </form>
   <table>
-    <thead><tr><th>包</th><th>版本</th><th>arch</th><th>状态</th><th>大小</th></tr></thead>
+    <thead><tr><th>包</th><th>版本</th><th>架构</th><th>状态</th><th>大小</th></tr></thead>
     <tbody>
     {% for p in packages %}
       <tr>
         <td><a href="/admin/packages/{{ p.id }}">{{ p.name }}</a></td>
         <td>{{ p.version }}</td>
         <td>{{ p.architecture }}</td>
-        <td>{{ p.state }}{% if p.state == "missing" %}（重新上传以修复）{% endif %}</td>
+        <td>{{ p.state | status_label }}{% if p.state == "missing" %}（重新上传以修复）{% endif %}</td>
         <td>{{ p.size | humansize }}</td>
       </tr>
     {% else %}
-      <tr><td colspan="5" class="muted">还没有包。上传一个 .deb 开始。</td></tr>
+      <tr><td colspan="5" class="muted">暂无软件包。</td></tr>
     {% endfor %}
     </tbody>
   </table>

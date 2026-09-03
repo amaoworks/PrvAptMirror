@@ -52,6 +52,18 @@ from prvaptmirror.publish import (
 from prvaptmirror.ratelimit import client_ip, cookie_secure_flag, is_locked, record_attempt
 from prvaptmirror.snippets import deb822_snippet, oneline_snippet
 from prvaptmirror.storage import DiskFullError, disk_preflight, write_incoming_stream
+from prvaptmirror.sources import (
+    DEFAULT_ASSET_PATTERN,
+    SourceValidationError,
+    create_source,
+    delete_source,
+    get_source,
+    list_sources,
+    queue_source,
+    source_artifacts,
+    source_runs,
+    update_source,
+)
 from prvaptmirror.settings import (
     SettingsValidationError,
     SETTINGS_PENDING_KEY,
@@ -85,6 +97,31 @@ def humansize(num: object) -> str:
 
 
 templates.env.filters["humansize"] = humansize
+
+STATUS_LABELS = {
+    "active": "有效",
+    "pending_delete": "删除中",
+    "missing": "缺失",
+    "success": "成功",
+    "failed": "失败",
+    "error": "失败",
+    "running": "进行中",
+    "queued": "等待同步",
+    "never": "尚未检查",
+    "pending": "等待处理",
+    "imported": "已导入",
+    "skipped": "已跳过",
+    "rejected": "已拒绝",
+    "conflict": "冲突",
+}
+
+
+def status_label(value: object) -> str:
+    text = str(value or "")
+    return STATUS_LABELS.get(text, text)
+
+
+templates.env.filters["status_label"] = status_label
 
 router = APIRouter()
 
@@ -386,6 +423,284 @@ def _settings_response(
     )
     _attach_csrf(request, response, user)
     return response
+
+
+def _source_values(source=None) -> dict[str, str]:
+    if source is None:
+        return {
+            "name": "",
+            "kind": "github_release",
+            "location": "",
+            "asset_pattern": DEFAULT_ASSET_PATTERN,
+            "interval_minutes": "30",
+            "release_limit": "1",
+            "include_prereleases": "",
+            "enabled": "yes",
+        }
+    return {
+        "name": source.name,
+        "kind": source.kind,
+        "location": source.location,
+        "asset_pattern": source.asset_pattern,
+        "interval_minutes": str(source.interval_minutes),
+        "release_limit": str(source.release_limit),
+        "include_prereleases": "yes" if source.include_prereleases else "",
+        "enabled": "yes" if source.enabled else "",
+    }
+
+
+def _source_form_response(
+    request: Request,
+    user: User,
+    values: dict[str, str],
+    *,
+    source=None,
+    error: str | None = None,
+    status_code: int = 200,
+):
+    cfg = _cfg(request)
+    conn = connect(cfg)
+    try:
+        runs = source_runs(conn, source.id) if source else []
+        artifacts = source_artifacts(conn, source.id) if source else []
+    finally:
+        conn.close()
+    response = templates.TemplateResponse(
+        request,
+        "source_form.html",
+        _flash_ctx(
+            request,
+            user,
+            _csrf_expected(request, user),
+            {
+                "source": source,
+                "values": values,
+                "token_configured": bool(source and source.token_encrypted),
+                "runs": runs,
+                "artifacts": artifacts,
+                "error": error,
+            },
+        ),
+        status_code=status_code,
+    )
+    _attach_csrf(request, response, user)
+    return response
+
+
+@router.get("/sources", response_class=HTMLResponse)
+def sources_list(request: Request):
+    user = current_user(request)
+    if user is None:
+        return RedirectResponse("/admin/login", status_code=303)
+    if user.must_change_password:
+        return RedirectResponse("/admin/password", status_code=303)
+    cfg = _cfg(request)
+    conn = connect(cfg)
+    try:
+        rows = list_sources(conn)
+    finally:
+        conn.close()
+    response = templates.TemplateResponse(
+        request,
+        "sources.html",
+        _flash_ctx(
+            request,
+            user,
+            _csrf_expected(request, user),
+            {"sources": rows},
+        ),
+    )
+    _attach_csrf(request, response, user)
+    return response
+
+
+@router.get("/sources/new", response_class=HTMLResponse)
+def source_new(request: Request):
+    user = current_user(request)
+    if user is None:
+        return RedirectResponse("/admin/login", status_code=303)
+    if user.must_change_password:
+        return RedirectResponse("/admin/password", status_code=303)
+    return _source_form_response(request, user, _source_values())
+
+
+@router.post("/sources")
+async def source_create(
+    request: Request,
+    csrf_token: Annotated[str, Form()] = "",
+    name: Annotated[str, Form()] = "",
+    kind: Annotated[str, Form()] = "",
+    location: Annotated[str, Form()] = "",
+    asset_pattern: Annotated[str, Form()] = "",
+    interval_minutes: Annotated[str, Form()] = "30",
+    release_limit: Annotated[str, Form()] = "1",
+    include_prereleases: Annotated[str, Form()] = "",
+    enabled: Annotated[str, Form()] = "",
+    token: Annotated[str, Form()] = "",
+):
+    user = current_user(request)
+    if user is None:
+        return RedirectResponse("/admin/login", status_code=303)
+    cfg = _cfg(request)
+    if not verify_csrf(request, cfg, csrf_token, _csrf_expected(request, user)):
+        return HTMLResponse("CSRF 校验失败", status_code=403)
+    if user.must_change_password:
+        return RedirectResponse("/admin/password", status_code=303)
+    values = {
+        "name": name,
+        "kind": kind,
+        "location": location,
+        "asset_pattern": asset_pattern,
+        "interval_minutes": interval_minutes,
+        "release_limit": release_limit,
+        "include_prereleases": include_prereleases,
+        "enabled": enabled,
+    }
+    conn = connect(cfg)
+    try:
+        try:
+            source = create_source(cfg, conn, values, token)
+        except SourceValidationError as exc:
+            return _source_form_response(
+                request, user, values, error=str(exc), status_code=400
+            )
+    finally:
+        conn.close()
+    request.app.state.source_scheduler.wake()
+    return RedirectResponse(f"/admin/sources/{source.id}?created=1", status_code=303)
+
+
+@router.get("/sources/{source_id}", response_class=HTMLResponse)
+def source_edit(request: Request, source_id: int):
+    user = current_user(request)
+    if user is None:
+        return RedirectResponse("/admin/login", status_code=303)
+    if user.must_change_password:
+        return RedirectResponse("/admin/password", status_code=303)
+    cfg = _cfg(request)
+    conn = connect(cfg)
+    try:
+        source = get_source(conn, source_id)
+    finally:
+        conn.close()
+    if source is None:
+        return HTMLResponse("not found", status_code=404)
+    return _source_form_response(request, user, _source_values(source), source=source)
+
+
+@router.post("/sources/{source_id}")
+async def source_update(
+    request: Request,
+    source_id: int,
+    csrf_token: Annotated[str, Form()] = "",
+    name: Annotated[str, Form()] = "",
+    kind: Annotated[str, Form()] = "",
+    location: Annotated[str, Form()] = "",
+    asset_pattern: Annotated[str, Form()] = "",
+    interval_minutes: Annotated[str, Form()] = "30",
+    release_limit: Annotated[str, Form()] = "1",
+    include_prereleases: Annotated[str, Form()] = "",
+    enabled: Annotated[str, Form()] = "",
+    token: Annotated[str, Form()] = "",
+    clear_token: Annotated[str, Form()] = "",
+):
+    user = current_user(request)
+    if user is None:
+        return RedirectResponse("/admin/login", status_code=303)
+    cfg = _cfg(request)
+    if not verify_csrf(request, cfg, csrf_token, _csrf_expected(request, user)):
+        return HTMLResponse("CSRF 校验失败", status_code=403)
+    if user.must_change_password:
+        return RedirectResponse("/admin/password", status_code=303)
+    values = {
+        "name": name,
+        "kind": kind,
+        "location": location,
+        "asset_pattern": asset_pattern,
+        "interval_minutes": interval_minutes,
+        "release_limit": release_limit,
+        "include_prereleases": include_prereleases,
+        "enabled": enabled,
+    }
+    conn = connect(cfg)
+    try:
+        existing = get_source(conn, source_id)
+        if existing is None:
+            return HTMLResponse("not found", status_code=404)
+        try:
+            source = update_source(
+                cfg,
+                conn,
+                source_id,
+                values,
+                token=token,
+                clear_token=clear_token == "yes",
+            )
+        except SourceValidationError as exc:
+            return _source_form_response(
+                request,
+                user,
+                values,
+                source=existing,
+                error=str(exc),
+                status_code=400,
+            )
+    finally:
+        conn.close()
+    request.app.state.source_scheduler.wake()
+    return RedirectResponse(f"/admin/sources/{source.id}?saved=1", status_code=303)
+
+
+@router.post("/sources/{source_id}/sync")
+async def source_sync_now(
+    request: Request,
+    source_id: int,
+    csrf_token: Annotated[str, Form()] = "",
+):
+    user = current_user(request)
+    if user is None:
+        return RedirectResponse("/admin/login", status_code=303)
+    cfg = _cfg(request)
+    if not verify_csrf(request, cfg, csrf_token, _csrf_expected(request, user)):
+        return HTMLResponse("CSRF 校验失败", status_code=403)
+    if user.must_change_password:
+        return RedirectResponse("/admin/password", status_code=303)
+    conn = connect(cfg)
+    try:
+        queued = queue_source(conn, source_id)
+    finally:
+        conn.close()
+    if not queued:
+        return RedirectResponse(f"/admin/sources/{source_id}?err=disabled", status_code=303)
+    request.app.state.source_scheduler.wake()
+    return RedirectResponse(f"/admin/sources/{source_id}?queued=1", status_code=303)
+
+
+@router.post("/sources/{source_id}/delete")
+async def source_delete(
+    request: Request,
+    source_id: int,
+    csrf_token: Annotated[str, Form()] = "",
+):
+    user = current_user(request)
+    if user is None:
+        return RedirectResponse("/admin/login", status_code=303)
+    cfg = _cfg(request)
+    if not verify_csrf(request, cfg, csrf_token, _csrf_expected(request, user)):
+        return HTMLResponse("CSRF 校验失败", status_code=403)
+    if user.must_change_password:
+        return RedirectResponse("/admin/password", status_code=303)
+    conn = connect(cfg)
+    try:
+        source = get_source(conn, source_id)
+        if source is None:
+            return HTMLResponse("not found", status_code=404)
+        if source.last_status == "running":
+            return RedirectResponse(f"/admin/sources/{source_id}?err=running", status_code=303)
+        delete_source(conn, source_id)
+    finally:
+        conn.close()
+    return RedirectResponse("/admin/sources?deleted=1", status_code=303)
 
 
 @router.get("/settings", response_class=HTMLResponse)

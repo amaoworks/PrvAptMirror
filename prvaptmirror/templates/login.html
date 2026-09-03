@@ -3,7 +3,7 @@
 {% block body %}
 <div class="card" style="max-width:420px;margin:3rem auto;">
   <h1>登录</h1>
-  <p class="muted">个人 apt 仓库后台。密码保存在本机 SQLite，不会发到第三方。</p>
+  <p class="muted">个人apt仓库后台</p>
   {% if error %}<p class="err">{{ error }}</p>{% endif %}
   <form class="login-form" method="post" action="/admin/login">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">

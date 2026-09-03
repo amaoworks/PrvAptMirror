@@ -13,7 +13,7 @@
     <label for="public_url">公开 URL</label>
     <input id="public_url" name="public_url" type="text" required
            value="{{ values.public_url }}" placeholder="https://apt.example.com">
-    <p class="muted">用于生成客户端接入命令；反向代理的监听和 TLS 仍由宿主机管理。</p>
+    <p class="muted">用于生成客户端接入命令。</p>
   </div>
 
   <div class="card">
@@ -35,7 +35,7 @@
     <label for="architectures">架构</label>
     <input id="architectures" name="architectures" type="text" required
            value="{{ values.architectures }}" placeholder="amd64,arm64,all">
-    <p class="muted">使用英文逗号分隔。移除架构后，对应软件包仍会保留，但不会进入新索引。</p>
+    <p class="muted">英文逗号分隔；移除后不再进入索引。</p>
     <div class="row">
       <div style="flex:1;min-width:220px">
         <label for="origin">Origin</label>
@@ -67,13 +67,12 @@
                required value="{{ values.session_days }}">
       </div>
     </div>
-    <p class="muted">会话期限只影响之后创建的登录会话。</p>
   </div>
 
   <div class="card">
     <label style="display:flex;gap:.6rem;align-items:flex-start">
       <input name="confirm_repository_change" type="checkbox" value="yes">
-      <span>我了解修改 Suite、Codename、Component、架构、Origin 或 Label 会立即重建并重新签名索引，可能需要同步修改现有客户端。</span>
+      <span>修改仓库元数据后立即重建索引。</span>
     </label>
     <button type="submit">保存设置</button>
   </div>

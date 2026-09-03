@@ -55,6 +55,27 @@ After login, use **Settings** to manage the public URL, Suite, Codename, Compone
 
 The image version, host data directory, bind address, port, trusted proxies, and secrets remain deployment settings. `.env.example` therefore contains only four deployment values.
 
+## Automatic package sources
+
+The **Sources** page configures automatic downloads without adding another container or configuration file. The scheduler runs inside the single Uvicorn process and stores source definitions, schedules, run history, and discovered artifacts in `data.sqlite`.
+
+Two source types are currently supported:
+
+- **GitHub Releases** — enter `owner/repository`, an asset filename regular expression, the number of recent releases to inspect, whether prereleases are included, and the polling interval. Only matching `.deb` assets are downloaded.
+- **Direct URL** — periodically fetch one HTTP(S) URL. `ETag` and `Last-Modified` are used when the server provides them, and content hashes prevent duplicate imports.
+
+Each source can be enabled or disabled, edited, deleted, or queued for an immediate synchronization from the web UI. Downloads are streamed into `data/incoming`, validated as Debian packages, imported in one batch, and then published and signed once. A matching package is skipped; the same Package/Version/Architecture with different content is reported as a conflict. Failed checks retry with exponential backoff up to the configured interval.
+
+An optional GitHub token can be entered on the source page for private repositories or higher API limits. It is encrypted before being stored and is never displayed again. The encryption key is derived from `data/secret-key`, so that file must remain with `data.sqlite` when moving or restoring an installation.
+
+The existing bind mount persists everything across image upgrades and container recreation:
+
+```text
+./data:/var/lib/prvaptmirror
+```
+
+No worker image or worker service is built: the web server, scheduler, downloader, package importer, and APT publisher all run in the one `app` container.
+
 To recover a forgotten administrator password from an interactive terminal:
 
 ```bash
@@ -94,4 +115,4 @@ Optional official-apt client: `tests/integration/test_apt_client.sh` (needs Dock
 docker compose exec app /app/scripts/backup.sh /tmp/prvapt-backup
 ```
 
-`scripts/backup.sh` needs `sqlite3` (installed in the image) and dumps `data.sqlite` plus `repo/pool` plus `gnupg/`. Restore stops the app first (`scripts/restore.sh`).
+`scripts/backup.sh` needs `sqlite3` (installed in the image) and dumps `data.sqlite` plus `repo/pool`, `gnupg/`, and `secret-key`. Treat the backup as sensitive because it contains signing keys and encrypted-source key material. Restore stops the app first (`scripts/restore.sh`).

@@ -1,4 +1,5 @@
-# App only. TLS / reverse proxy belongs on the host.
+# One app container also runs the persisted package-source scheduler.
+# TLS / reverse proxy belongs on the host.
 services:
   app:
     image: ${PRVAPT_IMAGE:-ghcr.io/amaoworks/prvaptmirror:latest}

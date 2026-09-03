@@ -31,6 +31,8 @@ def login(client) -> None:
 
 def test_login_without_origin_when_check_off(client):
     page = client.get("/admin/login")
+    assert "个人apt仓库后台" in page.text
+    assert "密码保存在本机" not in page.text
     assert 'class="login-form"' in page.text
     assert 'name="username" type="text"' in page.text
     assert 'name="password" type="password"' in page.text
@@ -63,6 +65,7 @@ def test_health_ready_login_upload_inrelease(client, tmp_path: Path):
     assert "ok" in health.text
     login(client)
     page = client.get("/admin/packages")
+    assert "暂无软件包。" in page.text
     token = _csrf(page.text)
     deb = build_deb(
         tmp_path / "hello-prv_1.0-1_all.deb",
@@ -94,6 +97,12 @@ def test_health_ready_login_upload_inrelease(client, tmp_path: Path):
     # download via admin
     listed = client.get("/admin/packages")
     assert "hello-prv" in listed.text
+    assert "有效" in listed.text
+    detail_match = re.search(r'href="(/admin/packages/\d+)"', listed.text)
+    assert detail_match
+    detail = client.get(detail_match.group(1))
+    assert "文件路径" in detail.text
+    assert "软件包信息" in detail.text
     setup = client.get("/admin/setup")
     pres = re.findall(r"<pre>(.*?)</pre>", setup.text, flags=re.S)
     joined = "\n".join(pres).lower()
@@ -157,6 +166,9 @@ def test_delete_http_drops_from_index(client, tmp_path: Path):
 def test_setup_snippet_no_trusted_yes(client):
     login(client)
     page = client.get("/admin/setup")
+    assert "在 Debian/Ubuntu 客户端配置此 APT 源" in page.text
+    assert "适用于 Debian 12+、Ubuntu 22.04+。" in page.text
+    assert "用于传统 <code>sources.list</code> 单行格式。" in page.text
     pres = re.findall(r"<pre>(.*?)</pre>", page.text, flags=re.S)
     text = "\n".join(pres).lower()
     assert "signed-by" in text
@@ -165,11 +177,98 @@ def test_setup_snippet_no_trusted_yes(client):
     assert "trusted.gpg.d" not in text
 
 
+def test_source_configuration_ui_persists_in_database(client):
+    class NoopScheduler:
+        def wake(self):
+            pass
+
+    client.app.state.source_scheduler = NoopScheduler()
+    login(client)
+    page = client.get("/admin/sources")
+    assert page.status_code == 200
+    assert "软件来源" in page.text
+    new_page = client.get("/admin/sources/new")
+    response = client.post(
+        "/admin/sources",
+        data={
+            "csrf_token": _csrf(new_page.text),
+            "name": "GitHub example",
+            "kind": "github_release",
+            "location": "https://github.com/acme/example",
+            "asset_pattern": r".*_amd64\.deb$",
+            "interval_minutes": "45",
+            "release_limit": "3",
+            "include_prereleases": "yes",
+            "token": "private-token",
+        },
+        headers=ORIGIN_HEADERS,
+        follow_redirects=False,
+    )
+    assert response.status_code == 303, response.text
+    detail = client.get(response.headers["location"])
+    assert "GitHub example" in detail.text
+    assert "acme/example" in detail.text
+    assert "private-token" not in detail.text
+    assert "已配置；留空则保持不变" in detail.text
+    assert "GitHub 填写 <code>owner/repository</code>；固定地址填写完整 URL。" in detail.text
+    assert "保存后不再显示" in detail.text
+
+    listing = client.get("/admin/sources")
+    assert "GitHub example" in listing.text
+    assert "已停用" in listing.text
+    assert "后台调度器与网站运行在同一个容器内" not in listing.text
+
+
+def test_source_manual_sync_is_queued_from_ui(client):
+    from prvaptmirror.db import connect
+    from prvaptmirror.sources import get_source
+
+    class NoopScheduler:
+        def wake(self):
+            pass
+
+    client.app.state.source_scheduler = NoopScheduler()
+    login(client)
+    new_page = client.get("/admin/sources/new")
+    created = client.post(
+        "/admin/sources",
+        data={
+            "csrf_token": _csrf(new_page.text),
+            "name": "Queue example",
+            "kind": "github_release",
+            "location": "acme/queue-example",
+            "asset_pattern": r".*\.deb$",
+            "interval_minutes": "30",
+            "release_limit": "1",
+            "enabled": "yes",
+        },
+        headers=ORIGIN_HEADERS,
+        follow_redirects=False,
+    )
+    detail = client.get(created.headers["location"])
+    source_id = int(re.search(r"/admin/sources/(\d+)", created.headers["location"]).group(1))
+    queued = client.post(
+        f"/admin/sources/{source_id}/sync",
+        data={"csrf_token": _csrf(detail.text)},
+        headers=ORIGIN_HEADERS,
+        follow_redirects=False,
+    )
+    assert queued.status_code == 303
+    assert "queued=1" in queued.headers["location"]
+    conn = connect(client.app.state.base_cfg)
+    source = get_source(conn, source_id)
+    assert source is not None and source.last_status == "queued"
+    conn.close()
+
+
 def test_settings_update_runtime_values_and_republish(client):
     login(client)
     page = client.get("/admin/settings")
     assert page.status_code == 200
     assert "公开 URL" in page.text
+    assert "用于生成客户端接入命令。" in page.text
+    assert "英文逗号分隔；移除后不再进入索引。" in page.text
+    assert "会话期限只影响" not in page.text
     token = _csrf(page.text)
     values = {
         "csrf_token": token,

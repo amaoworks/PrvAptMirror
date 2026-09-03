@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -40,7 +41,14 @@ def ready(cfg):
     bootstrap_admin(cfg, conn)
     ensure_key(cfg, conn)
     conn.close()
-    return cfg
+    try:
+        yield cfg
+    finally:
+        subprocess.run(
+            ["gpgconf", "--homedir", str(cfg.gnupg_dir), "--kill", "gpg-agent"],
+            check=False,
+            capture_output=True,
+        )
 
 
 @pytest.fixture
