@@ -63,6 +63,7 @@ def build_deb(
     description: str = "example arch-all package\nThis is the extended description.\n\nSecond paragraph.",
     extra_fields: dict[str, str] | None = None,
     control_compress: str = "gz",
+    zstd_write_content_size: bool = True,
     essential: bool = False,
     include_data: bool = True,
     debian_binary: bytes = b"2.0\n",
@@ -92,7 +93,9 @@ def build_deb(
     control_tar = _tar_bytes({"./control": control})
     if control_compress == "zst":
         control_member = "control.tar.zst"
-        control_blob = zstandard.ZstdCompressor().compress(control_tar)
+        control_blob = zstandard.ZstdCompressor(
+            write_content_size=zstd_write_content_size
+        ).compress(control_tar)
     elif control_compress == "gz":
         control_member = "control.tar.gz"
         control_blob = gzip.compress(control_tar, mtime=0)

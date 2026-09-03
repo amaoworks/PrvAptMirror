@@ -83,6 +83,27 @@ def normalize_direct_url(raw: str) -> str:
     return value
 
 
+def validate_github_probe_values(
+    location: str, asset_pattern: str, release_limit: str
+) -> tuple[str, str, int]:
+    """Validate the GitHub fields shared by source saves and live previews."""
+    repository = normalize_github_repository(location)
+    pattern = asset_pattern.strip() or DEFAULT_ASSET_PATTERN
+    if len(pattern) > 500:
+        raise SourceValidationError("Asset 匹配表达式不能超过 500 个字符")
+    try:
+        re.compile(pattern, re.IGNORECASE)
+    except re.error as exc:
+        raise SourceValidationError(f"Asset 匹配表达式无效：{exc}") from exc
+    try:
+        limit = int(release_limit)
+    except ValueError as exc:
+        raise SourceValidationError("Release 数量必须是整数") from exc
+    if not 1 <= limit <= 20:
+        raise SourceValidationError("Release 数量必须在 1 到 20 之间")
+    return repository, pattern, limit
+
+
 def validate_source_values(values: Mapping[str, str]) -> dict[str, object]:
     name = values.get("name", "").strip()
     if not name or len(name) > 80:
@@ -92,28 +113,32 @@ def validate_source_values(values: Mapping[str, str]) -> dict[str, object]:
         raise SourceValidationError("不支持的软件来源类型")
     location = values.get("location", "").strip()
     if kind == "github_release":
-        location = normalize_github_repository(location)
+        location, asset_pattern, release_limit = validate_github_probe_values(
+            location,
+            values.get("asset_pattern", ""),
+            values.get("release_limit", "1"),
+        )
     else:
         location = normalize_direct_url(location)
-    asset_pattern = values.get("asset_pattern", "").strip() or DEFAULT_ASSET_PATTERN
-    if len(asset_pattern) > 500:
-        raise SourceValidationError("Asset 匹配表达式不能超过 500 个字符")
-    try:
-        re.compile(asset_pattern, re.IGNORECASE)
-    except re.error as exc:
-        raise SourceValidationError(f"Asset 匹配表达式无效：{exc}") from exc
+        asset_pattern = values.get("asset_pattern", "").strip() or DEFAULT_ASSET_PATTERN
+        if len(asset_pattern) > 500:
+            raise SourceValidationError("Asset 匹配表达式不能超过 500 个字符")
+        try:
+            re.compile(asset_pattern, re.IGNORECASE)
+        except re.error as exc:
+            raise SourceValidationError(f"Asset 匹配表达式无效：{exc}") from exc
+        try:
+            release_limit = int(values.get("release_limit", "1"))
+        except ValueError as exc:
+            raise SourceValidationError("Release 数量必须是整数") from exc
+        if not 1 <= release_limit <= 20:
+            raise SourceValidationError("Release 数量必须在 1 到 20 之间")
     try:
         interval_minutes = int(values.get("interval_minutes", "30"))
     except ValueError as exc:
         raise SourceValidationError("检查间隔必须是整数") from exc
     if not 5 <= interval_minutes <= 10080:
         raise SourceValidationError("检查间隔必须在 5 到 10080 分钟之间")
-    try:
-        release_limit = int(values.get("release_limit", "1"))
-    except ValueError as exc:
-        raise SourceValidationError("Release 数量必须是整数") from exc
-    if not 1 <= release_limit <= 20:
-        raise SourceValidationError("Release 数量必须在 1 到 20 之间")
     return {
         "name": name,
         "kind": kind,

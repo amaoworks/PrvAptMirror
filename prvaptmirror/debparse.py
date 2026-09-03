@@ -120,7 +120,13 @@ def _decompress_tar(name: str, blob: bytes) -> bytes:
     lower = name.lower()
     if lower.endswith(".tar.zst") or lower.endswith(".tar.zstd"):
         try:
-            return zstandard.ZstdDecompressor().decompress(blob)
+            # Zstd frames are allowed to omit their decompressed content size.
+            # The one-shot ``decompress`` API rejects those otherwise-valid
+            # frames, while the streaming API handles both frame variants.
+            with zstandard.ZstdDecompressor().stream_reader(
+                io.BytesIO(blob)
+            ) as reader:
+                return reader.read()
         except zstandard.ZstdError as exc:
             raise DebParseError("无法解压 control.tar.zst（损坏或内部错误）") from exc
     if lower.endswith(".tar.gz") or lower.endswith(".tar.gzip"):
@@ -235,14 +241,22 @@ def parse_deb(path: Path, allowed_archs: tuple[str, ...] | None = None) -> Parse
         if required not in raw_fields or not raw_fields[required].strip():
             raise DebParseError(f"control 缺少必填字段 {required}")
 
-    name = raw_fields["Package"].strip()
+    original_name = raw_fields["Package"].strip()
+    # libdpkg canonicalizes ASCII uppercase package names when reading a .deb
+    # (for example ``dpkg-deb -f`` prints Bettbox as bettbox).  Mirror that
+    # compatibility behavior so the generated Packages index uses the name
+    # apt/dpkg will use, without modifying the downloaded upstream artifact.
+    name = original_name.lower()
     version = raw_fields["Version"].strip()
     architecture = raw_fields["Architecture"].strip()
 
     if not PACKAGE_RE.match(name):
-        raise DebParseError(f"非法 Package 名: {name}")
+        raise DebParseError(f"非法 Package 名: {original_name}")
     if _unsafe_path_fragment(name, allow_colon=False):
         raise DebParseError("Package 名含非法路径字符")
+    if name != original_name:
+        raw_fields["Package"] = name
+        warnings.append(f"normalized Package field from {original_name!r} to {name!r}")
     if _unsafe_path_fragment(architecture, allow_colon=False):
         raise DebParseError("Architecture 含非法路径字符")
     if _unsafe_path_fragment(version, allow_colon=True):

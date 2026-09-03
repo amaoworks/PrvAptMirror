@@ -4,7 +4,13 @@ import httpx
 import pytest
 
 from prvaptmirror.db import connect, init_db
-from prvaptmirror.source_sync import SourceScheduler, recover_interrupted_source_runs, sync_source_once
+from prvaptmirror.source_sync import (
+    SourceScheduler,
+    preview_github_source,
+    preview_http_directory,
+    recover_interrupted_source_runs,
+    sync_source_once,
+)
 from prvaptmirror.sources import (
     SourceValidationError,
     create_source,
@@ -177,6 +183,130 @@ def test_github_release_sync_imports_once_and_publishes(ready, tmp_path):
     client.close()
 
 
+def test_manual_sync_retries_rejected_asset_with_compatible_deb(ready, tmp_path):
+    repaired_deb = build_deb(
+        tmp_path / "Bettbox.deb",
+        package="Bettbox",
+        version="1.19.0+2026090201",
+        architecture="amd64",
+        control_compress="zst",
+        zstd_write_content_size=False,
+    ).read_bytes()
+    asset_requests = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal asset_requests
+        if request.url.path == "/repos/acme/tool/releases":
+            return httpx.Response(
+                200,
+                json=[
+                    {
+                        "draft": False,
+                        "prerelease": False,
+                        "assets": [
+                            {
+                                "id": 201,
+                                "name": "tool_1.19.0_amd64.deb",
+                                "url": "https://api.github.com/repos/acme/tool/releases/assets/201",
+                                "size": len(repaired_deb),
+                                "updated_at": "2026-09-03T00:00:00Z",
+                            }
+                        ],
+                    }
+                ],
+            )
+        if request.url.path.endswith("/assets/201"):
+            asset_requests += 1
+            content = b"not a deb" if asset_requests == 1 else repaired_deb
+            return httpx.Response(200, content=content)
+        return httpx.Response(404)
+
+    conn = connect(ready)
+    source = create_source(ready, conn, _values(release_limit="1"))
+    conn.close()
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+
+    assert sync_source_once(ready, source.id, client=client)
+    conn = connect(ready)
+    failed = get_source(conn, source.id)
+    assert failed is not None and failed.last_status == "error"
+    artifact = conn.execute(
+        "SELECT * FROM source_artifacts WHERE source_id = ?", (source.id,)
+    ).fetchone()
+    assert artifact is not None and artifact["status"] == "rejected"
+    assert queue_source(conn, source.id)
+    conn.close()
+
+    assert sync_source_once(ready, source.id, client=client)
+    conn = connect(ready)
+    repaired = get_source(conn, source.id)
+    assert repaired is not None and repaired.last_status == "success"
+    package = conn.execute("SELECT * FROM packages WHERE name = 'bettbox'").fetchone()
+    assert package is not None
+    artifact = conn.execute(
+        "SELECT * FROM source_artifacts WHERE source_id = ?", (source.id,)
+    ).fetchone()
+    assert artifact is not None and artifact["status"] == "imported"
+    assert asset_requests == 2
+    conn.close()
+    client.close()
+
+
+def test_github_source_preview_uses_sync_selection_rules():
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/repos/acme/tool/releases"
+        assert request.url.params["per_page"] == "20"
+        assert request.headers["authorization"] == "Bearer preview-token"
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "tag_name": "v2.0.0",
+                    "draft": False,
+                    "prerelease": False,
+                    "assets": [
+                        {"name": "tool_2.0.0_amd64.deb", "size": 1024},
+                        {"name": "tool_2.0.0_arm64.deb", "size": 2048},
+                        {"name": "tool_2.0.0_windows.zip", "size": 4096},
+                    ],
+                },
+                {
+                    "tag_name": "v2.1.0-rc1",
+                    "draft": False,
+                    "prerelease": True,
+                    "assets": [{"name": "tool_rc_amd64.deb", "size": 512}],
+                },
+                {
+                    "tag_name": "v3.0.0-draft",
+                    "draft": True,
+                    "prerelease": False,
+                    "assets": [{"name": "tool_draft_amd64.deb", "size": 512}],
+                },
+            ],
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    preview = preview_github_source(
+        "https://github.com/acme/tool/releases/latest",
+        r"_amd64\.deb$",
+        "2",
+        token="preview-token",
+        client=client,
+    )
+    assert preview.repository == "acme/tool"
+    assert preview.releases_checked == 1
+    assert preview.matched_count == 1
+    assert [asset.filename for asset in preview.assets] == [
+        "tool_2.0.0_amd64.deb",
+        "tool_2.0.0_arm64.deb",
+        "tool_2.0.0_windows.zip",
+    ]
+    assert [asset.selected for asset in preview.assets] == [True, False, False]
+    assert preview.assets[1].is_deb and not preview.assets[1].pattern_matches
+    assert not preview.assets[2].is_deb
+    client.close()
+
+
 def test_direct_url_uses_conditional_request_and_skips_same_content(ready, tmp_path):
     deb = build_deb(
         tmp_path / "direct_1.0-1_all.deb",
@@ -230,6 +360,140 @@ def test_direct_url_uses_conditional_request_and_skips_same_content(ready, tmp_p
     assert last["status"] == "success"
     assert last["downloaded"] == 0
     conn.close()
+    client.close()
+
+
+def test_direct_url_reports_html_response_before_deb_parsing(ready):
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=b"<html>download error</html>",
+            headers={"Content-Type": "text/html"},
+        )
+
+    conn = connect(ready)
+    source = create_source(
+        ready,
+        conn,
+        _values(
+            name="HTML instead of deb",
+            kind="direct_url",
+            location="https://downloads.example.test/package.deb",
+        ),
+    )
+    conn.close()
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+
+    assert sync_source_once(ready, source.id, client=client)
+    conn = connect(ready)
+    failed = get_source(conn, source.id)
+    assert failed is not None and failed.last_status == "error"
+    assert "下载响应不是 .deb" in (failed.last_error or "")
+    assert "Content-Type text/html" in (failed.last_error or "")
+    conn.close()
+    client.close()
+
+
+def test_http_directory_imports_only_latest_debian_version(ready, tmp_path):
+    latest = build_deb(
+        tmp_path / "tuxedo-yt6801_1.0.31-8_all.deb",
+        package="tuxedo-yt6801",
+        version="1.0.31-8",
+        architecture="all",
+    ).read_bytes()
+    downloads: list[str] = []
+    directory = "https://deb.example.test/pool/main/t/tuxedo-yt6801/"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if str(request.url) == directory:
+            return httpx.Response(
+                200,
+                text="""
+                <html><body>
+                  <a href="../">Parent</a>
+                  <a href="tuxedo-yt6801_1.0.29tux0_all.deb">old</a>
+                  <a href="tuxedo-yt6801_1.0.31-8_all.deb">latest</a>
+                  <a href="https://other.example/evil_9.0_all.deb">external</a>
+                  <a href="source_2.0.dsc">source</a>
+                </body></html>
+                """,
+            )
+        downloads.append(request.url.path)
+        if request.url.path.endswith("tuxedo-yt6801_1.0.31-8_all.deb"):
+            return httpx.Response(200, content=latest)
+        return httpx.Response(404)
+
+    conn = connect(ready)
+    source = create_source(
+        ready,
+        conn,
+        _values(
+            name="TUXEDO YT6801",
+            kind="direct_url",
+            location=directory,
+            asset_pattern=r"^tuxedo-yt6801_.*_all\.deb$",
+        ),
+    )
+    conn.close()
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+
+    assert sync_source_once(ready, source.id, client=client)
+    conn = connect(ready)
+    package = conn.execute(
+        "SELECT * FROM packages WHERE name = 'tuxedo-yt6801'"
+    ).fetchone()
+    assert package is not None and package["version"] == "1.0.31-8"
+    run = conn.execute(
+        "SELECT * FROM source_runs WHERE source_id = ? ORDER BY id DESC", (source.id,)
+    ).fetchone()
+    assert (run["status"], run["discovered"], run["downloaded"], run["imported"]) == (
+        "success",
+        1,
+        1,
+        1,
+    )
+    assert downloads == ["/pool/main/t/tuxedo-yt6801/tuxedo-yt6801_1.0.31-8_all.deb"]
+    conn.close()
+    client.close()
+
+
+def test_http_directory_preview_probes_selected_deb_magic():
+    directory = "https://deb.example.test/pool/tool/"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if str(request.url) == directory:
+            return httpx.Response(
+                200,
+                text="""
+                <a href="tool_1.0_all.deb">old</a>
+                <a href="tool_2.0_all.deb">latest</a>
+                <a href="tool_2.0.dsc">source</a>
+                """,
+            )
+        assert request.headers["range"] == "bytes=0-7"
+        return httpx.Response(
+            200,
+            content=b"<html>not a deb</html>",
+            headers={"Content-Type": "text/html"},
+        )
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    preview = preview_http_directory(
+        directory,
+        r"^tool_.*_all\.deb$",
+        client=client,
+    )
+
+    assert preview.matched_count == 1
+    assert preview.ready_count == 0
+    selected = next(asset for asset in preview.assets if asset.selected)
+    assert selected.filename == "tool_2.0_all.deb"
+    assert selected.response_status == 200
+    assert selected.content_type == "text/html"
+    assert selected.valid_deb is False
+    assert "不是 Debian ar 文件" in (selected.error or "")
+    old = next(asset for asset in preview.assets if asset.filename == "tool_1.0_all.deb")
+    assert not old.selected
     client.close()
 
 

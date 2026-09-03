@@ -37,7 +37,7 @@ docker compose pull
 docker compose up -d
 ```
 
-`.env.example` pins the `0.0.1` image. Change `PRVAPT_IMAGE` explicitly when upgrading. To build locally instead:
+`.env.example` pins the `0.1.0` image. Change `PRVAPT_IMAGE` explicitly when upgrading. To build locally instead:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.build.yml up --build
@@ -62,9 +62,11 @@ The **Sources** page configures automatic downloads without adding another conta
 Two source types are currently supported:
 
 - **GitHub Releases** — enter `owner/repository`, an asset filename regular expression, the number of recent releases to inspect, whether prereleases are included, and the polling interval. Only matching `.deb` assets are downloaded.
-- **Direct URL** — periodically fetch one HTTP(S) URL. `ETag` and `Last-Modified` are used when the server provides them, and content hashes prevent duplicate imports.
+- **Direct URL or HTTP directory** — periodically fetch one `.deb` URL, or enumerate a same-origin HTML directory whose URL ends in `/`. Directory sources apply the asset regex and use Debian version ordering to select the newest `package_version_arch.deb` for each package and architecture. Fixed files use `ETag` and `Last-Modified` when available, and content hashes prevent duplicate imports.
 
-Each source can be enabled or disabled, edited, deleted, or queued for an immediate synchronization from the web UI. Downloads are streamed into `data/incoming`, validated as Debian packages, imported in one batch, and then published and signed once. A matching package is skipped; the same Package/Version/Architecture with different content is reported as a conflict. Failed checks retry with exponential backoff up to the configured interval.
+Each source can be enabled or disabled, edited, deleted, or queued for an immediate synchronization from the web UI. Downloads are streamed into `data/incoming`, validated as Debian packages, imported in one batch, and then published and signed once. A matching package is skipped; the same Package/Version/Architecture with different content is reported as a conflict. A manually queued synchronization retries selected rejected/conflicting assets, while scheduled checks skip those terminal records. Failed checks retry with exponential backoff up to the configured interval.
+
+When adding or editing a GitHub or HTTP-directory source, **Test fetch and regex** reads remote metadata without saving the source and shows why each asset would be selected or ignored. For a directory, it also probes the selected URL and verifies the Debian ar magic before reporting that the package can be imported.
 
 An optional GitHub token can be entered on the source page for private repositories or higher API limits. It is encrypted before being stored and is never displayed again. The encryption key is derived from `data/secret-key`, so that file must remain with `data.sqlite` when moving or restoring an installation.
 
@@ -84,7 +86,7 @@ docker compose exec app prvaptmirror-admin reset-password --username admin
 
 ## Container releases
 
-Pushing to `main` publishes `edge` and `sha-*` images. Pushing a semantic Git tag such as `v0.0.1` publishes release tags (`0.0.1`, `0.0`, `0`) and updates `latest`. Released full-version tags must not be overwritten. Production deployments should pin the full version instead of using `latest`.
+Pushing to `main` publishes `edge` and `sha-*` images. Pushing a semantic Git tag such as `v0.1.0` publishes release tags (`0.1.0`, `0.1`, `0`) and updates `latest`. Released full-version tags must not be overwritten. Production deployments should pin the full version instead of using `latest`.
 
 ## Without Docker
 

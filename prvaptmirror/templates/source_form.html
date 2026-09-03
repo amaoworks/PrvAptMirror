@@ -17,6 +17,7 @@
 
 <form class="settings-form" method="post" action="{{ '/admin/sources/' ~ source.id if source else '/admin/sources' }}">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <input type="hidden" name="source_id" value="{{ source.id if source else 0 }}">
   <div class="card">
     <div class="form-grid-2">
       <div>
@@ -27,20 +28,20 @@
         <label for="kind">来源类型</label>
         <select id="kind" name="kind">
           <option value="github_release" {% if values.kind == "github_release" %}selected{% endif %}>GitHub Releases</option>
-          <option value="direct_url" {% if values.kind == "direct_url" %}selected{% endif %}>固定 .deb 下载地址</option>
+          <option value="direct_url" {% if values.kind == "direct_url" %}selected{% endif %}>固定 .deb / HTTP 目录</option>
         </select>
       </div>
     </div>
 
-    <label for="location">GitHub 仓库或下载地址</label>
+    <label for="location">GitHub 仓库、.deb 地址或 HTTP 目录</label>
     <input id="location" name="location" type="text" required value="{{ values.location }}"
-           placeholder="owner/repository 或 https://example.com/package.deb">
-    <p class="form-hint muted">GitHub 填写 <code>owner/repository</code>；固定地址填写完整 URL。</p>
+           placeholder="owner/repository、https://example.com/package.deb 或 https://example.com/pool/tool/">
+    <p class="form-hint muted">GitHub 填写 <code>owner/repository</code>；HTTP 目录地址必须以 <code>/</code> 结尾。</p>
 
-    <label for="asset_pattern">GitHub Asset 匹配表达式</label>
+    <label for="asset_pattern">Asset 匹配表达式</label>
     <input id="asset_pattern" name="asset_pattern" type="text" required value="{{ values.asset_pattern }}"
            placeholder=".*_(amd64|arm64)\.deb$">
-    <p class="form-hint muted">仅下载匹配正则的 <code>.deb</code> 文件；固定地址无需设置。</p>
+    <p class="form-hint muted">GitHub 和 HTTP 目录只下载匹配正则的 <code>.deb</code>；单个固定文件无需设置。</p>
 
     <div class="form-grid-2">
       <div>
@@ -75,7 +76,21 @@
       </label>
     </div>
 
-    <div style="margin-top: 1.25rem;">
+    <div id="github-source-test" style="margin-top: 1.25rem;">
+      <div class="toolbar">
+        <button class="btn-secondary" type="button"
+                hx-post="/admin/sources/test"
+                hx-include="closest form"
+                hx-target="#source-test-result"
+                hx-swap="innerHTML"
+                hx-disabled-elt="this"
+                hx-indicator="#source-test-loading">测试获取与正则</button>
+        <span id="source-test-loading" class="htmx-indicator muted">正在读取远端元数据并验证下载…</span>
+      </div>
+      <div id="source-test-result" aria-live="polite"></div>
+    </div>
+
+    <div class="toolbar" style="margin-top: 1.25rem;">
       <button type="submit">{{ "保存来源" if source else "创建来源" }}</button>
     </div>
   </div>
@@ -160,5 +175,18 @@
   </div>
 </div>
 {% endif %}
+<script>
+  (() => {
+    const kind = document.getElementById("kind");
+    const location = document.getElementById("location");
+    const test = document.getElementById("github-source-test");
+    const update = () => {
+      test.hidden = kind.value !== "github_release" &&
+        !(kind.value === "direct_url" && location.value.trim().endsWith("/"));
+    };
+    kind.addEventListener("change", update);
+    location.addEventListener("input", update);
+    update();
+  })();
+</script>
 {% endblock %}
-

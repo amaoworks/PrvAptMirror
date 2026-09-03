@@ -23,7 +23,7 @@
       {% for source in sources %}
         <tr>
           <td><a href="/admin/sources/{{ source.id }}" style="font-weight: 500; text-decoration: none; color: var(--acc);">{{ source.name }}</a></td>
-          <td>{{ "GitHub Releases" if source.kind == "github_release" else "固定下载地址" }}</td>
+          <td>{{ "GitHub Releases" if source.kind == "github_release" else "固定地址 / HTTP 目录" }}</td>
           <td>
             {% if not source.enabled %}<span class="badge badge-mute">已停用</span>
             {% elif source.last_status == "error" %}<span class="badge badge-err">失败</span>
@@ -43,4 +43,3 @@
   </div>
 </div>
 {% endblock %}
-

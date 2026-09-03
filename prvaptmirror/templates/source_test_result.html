@@ -1,0 +1,102 @@
+{% if error %}
+  <p class="err flash">{{ error }}</p>
+{% elif preview.directory is defined %}
+  <p class="{{ 'ok' if preview.ready_count else 'err' }} flash">
+    已读取 HTTP 目录 <code>{{ preview.directory }}</code>；
+    共看到 {{ preview.assets | length }} 个文件，选中 {{ preview.matched_count }} 个最新版，
+    {{ preview.ready_count }} 个通过下载验证。
+  </p>
+  {% if preview.truncated %}
+    <p class="muted form-hint">结果较多，页面仅显示前 200 个文件。</p>
+  {% endif %}
+  {% if preview.assets %}
+    <div class="table-responsive" style="margin-top: 0.75rem;">
+      <table>
+        <thead>
+          <tr>
+            <th>文件名</th>
+            <th>版本</th>
+            <th>架构</th>
+            <th>响应</th>
+            <th>测试结果</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for asset in preview.assets %}
+          <tr>
+            <td><code>{{ asset.filename }}</code></td>
+            <td><code>{{ asset.version or "—" }}</code></td>
+            <td><code>{{ asset.architecture or "—" }}</code></td>
+            <td>
+              {% if asset.response_status %}HTTP {{ asset.response_status }}{% else %}—{% endif %}
+              {% if asset.content_type %}<br><span class="muted">{{ asset.content_type }}</span>{% endif %}
+            </td>
+            <td>
+              {% if asset.selected and asset.valid_deb %}
+                <span class="badge badge-ok">最新版，可导入</span>
+              {% elif asset.selected %}
+                <span class="badge badge-err">下载验证失败</span>
+                {% if asset.error %}<br><span class="err">{{ asset.error }}</span>{% endif %}
+              {% elif not asset.is_deb %}
+                <span class="badge badge-mute">不是 .deb</span>
+              {% elif not asset.pattern_matches %}
+                <span class="badge badge-warn">正则未命中</span>
+              {% elif not asset.valid_filename %}
+                <span class="badge badge-warn">文件名格式无效</span>
+              {% else %}
+                <span class="badge badge-mute">较旧版本</span>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="muted form-hint">目录中没有可检查的文件链接。</p>
+  {% endif %}
+{% else %}
+  <p class="{{ 'ok' if preview.matched_count else 'err' }} flash">
+    已读取 <code>{{ preview.repository }}</code> 的 {{ preview.releases_checked }} 个 Release；
+    共看到 {{ preview.assets | length }} 个 Asset，{{ preview.matched_count }} 个将被抓取。
+  </p>
+  {% if preview.truncated %}
+    <p class="muted form-hint">结果较多，页面仅显示前 200 个 Asset。</p>
+  {% endif %}
+  {% if preview.assets %}
+    <div class="table-responsive" style="margin-top: 0.75rem;">
+      <table>
+        <thead>
+          <tr>
+            <th>Release</th>
+            <th>Asset 文件名</th>
+            <th>大小</th>
+            <th>测试结果</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for asset in preview.assets %}
+          <tr>
+            <td><code>{{ asset.release }}</code></td>
+            <td><code>{{ asset.filename or "（空文件名）" }}</code></td>
+            <td>{{ asset.size | humansize if asset.size is not none else "—" }}</td>
+            <td>
+              {% if asset.selected %}
+                <span class="badge badge-ok">将抓取</span>
+              {% elif not asset.is_deb %}
+                <span class="badge badge-mute">不是 .deb</span>
+              {% else %}
+                <span class="badge badge-warn">正则未命中</span>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% elif preview.releases_checked == 0 %}
+    <p class="muted form-hint">没有符合当前“包含 prerelease”设置的 Release。</p>
+  {% else %}
+    <p class="muted form-hint">所检查的 Release 没有 Asset。</p>
+  {% endif %}
+{% endif %}

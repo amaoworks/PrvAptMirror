@@ -7,11 +7,14 @@ import re
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from html.parser import HTMLParser
 from pathlib import Path
-from urllib.parse import unquote, urlparse
+from urllib.parse import unquote, urljoin, urlparse
 
 import httpx
+from debian.debian_support import Version
 
+from prvaptmirror import __version__
 from prvaptmirror.config import Config
 from prvaptmirror.db import connect, get_package_nva, transaction
 from prvaptmirror.debparse import DebParseError, ParsedDeb, parse_deb
@@ -19,10 +22,18 @@ from prvaptmirror.events import emit
 from prvaptmirror.models import SourceRow
 from prvaptmirror.publish import upload_commit
 from prvaptmirror.settings import load_app_config
-from prvaptmirror.sources import decrypt_token, now_iso, source_from_row
+from prvaptmirror.sources import (
+    decrypt_token,
+    normalize_direct_url,
+    now_iso,
+    source_from_row,
+    validate_github_probe_values,
+)
 from prvaptmirror.storage import DiskFullError, write_incoming_stream
 
 FINAL_ARTIFACT_STATUSES = {"imported", "skipped", "rejected", "conflict"}
+MAX_DIRECTORY_INDEX_BYTES = 2 * 1024 * 1024
+USER_AGENT = f"PrvAptMirror/{__version__}"
 
 
 @dataclass(frozen=True)
@@ -33,12 +44,90 @@ class RemoteAsset:
     size: int | None = None
 
 
+@dataclass(frozen=True)
+class GitHubAssetPreview:
+    release: str
+    filename: str
+    size: int | None
+    is_deb: bool
+    pattern_matches: bool
+
+    @property
+    def selected(self) -> bool:
+        return self.is_deb and self.pattern_matches
+
+
+@dataclass(frozen=True)
+class GitHubSourcePreview:
+    repository: str
+    releases_checked: int
+    assets: tuple[GitHubAssetPreview, ...]
+    truncated: bool = False
+
+    @property
+    def matched_count(self) -> int:
+        return sum(asset.selected for asset in self.assets)
+
+
+@dataclass(frozen=True)
+class DirectoryAssetPreview:
+    filename: str
+    version: str | None
+    architecture: str | None
+    is_deb: bool
+    pattern_matches: bool
+    valid_filename: bool
+    selected: bool
+    response_status: int | None = None
+    content_type: str | None = None
+    valid_deb: bool | None = None
+    error: str | None = None
+
+
+@dataclass(frozen=True)
+class DirectorySourcePreview:
+    directory: str
+    assets: tuple[DirectoryAssetPreview, ...]
+    truncated: bool = False
+
+    @property
+    def matched_count(self) -> int:
+        return sum(asset.selected for asset in self.assets)
+
+    @property
+    def ready_count(self) -> int:
+        return sum(asset.selected and asset.valid_deb is True for asset in self.assets)
+
+
+@dataclass(frozen=True)
+class _DirectoryCandidate:
+    filename: str
+    url: str
+    is_deb: bool
+    pattern_matches: bool
+    identity: tuple[str, Version, str] | None
+
+
 @dataclass
 class SyncStats:
     discovered: int = 0
     downloaded: int = 0
     imported: int = 0
     skipped: int = 0
+
+
+class _HrefParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.hrefs: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag.lower() != "a":
+            return
+        for key, value in attrs:
+            if key.lower() == "href" and value:
+                self.hrefs.append(value)
+                return
 
 
 def _utc_now() -> datetime:
@@ -160,9 +249,15 @@ def _finish_source(
         )
 
 
-def _github_assets(client: httpx.Client, source: SourceRow) -> list[RemoteAsset]:
+def _github_release_items(
+    client: httpx.Client,
+    repository: str,
+    *,
+    include_prereleases: bool,
+    release_limit: int,
+) -> list[dict]:
     response = client.get(
-        f"https://api.github.com/repos/{source.location}/releases",
+        f"https://api.github.com/repos/{repository}/releases",
         params={"per_page": 20},
     )
     response.raise_for_status()
@@ -174,8 +269,18 @@ def _github_assets(client: httpx.Client, source: SourceRow) -> list[RemoteAsset]
         for item in payload
         if isinstance(item, dict)
         and not item.get("draft")
-        and (source.include_prereleases or not item.get("prerelease"))
-    ][: source.release_limit]
+        and (include_prereleases or not item.get("prerelease"))
+    ][:release_limit]
+    return releases
+
+
+def _github_assets(client: httpx.Client, source: SourceRow) -> list[RemoteAsset]:
+    releases = _github_release_items(
+        client,
+        source.location,
+        include_prereleases=source.include_prereleases,
+        release_limit=source.release_limit,
+    )
     pattern = re.compile(source.asset_pattern, re.IGNORECASE)
     found: list[RemoteAsset] = []
     for release in reversed(releases):
@@ -205,6 +310,276 @@ def _github_assets(client: httpx.Client, source: SourceRow) -> list[RemoteAsset]
     return found
 
 
+def _directory_deb_identity(filename: str) -> tuple[str, Version, str] | None:
+    if not filename.lower().endswith(".deb"):
+        return None
+    try:
+        package, version_text, architecture = filename[:-4].rsplit("_", 2)
+    except ValueError:
+        return None
+    if not package or not version_text or not architecture:
+        return None
+    try:
+        version = Version(version_text)
+    except Exception:
+        return None
+    return package.lower(), version, architecture.lower()
+
+
+def _http_directory_candidates(
+    client: httpx.Client,
+    location: str,
+    asset_pattern: str,
+) -> list[_DirectoryCandidate]:
+    response = client.get(
+        location,
+        headers={"Accept": "text/html,application/xhtml+xml"},
+    )
+    response.raise_for_status()
+    if len(response.content) > MAX_DIRECTORY_INDEX_BYTES:
+        raise ValueError("HTTP 目录索引超过 2 MiB 限制")
+
+    parser = _HrefParser()
+    parser.feed(response.text)
+    pattern = re.compile(asset_pattern, re.IGNORECASE)
+    base = urlparse(location)
+    base_path = base.path if base.path.endswith("/") else base.path + "/"
+    candidates: list[_DirectoryCandidate] = []
+
+    for href in parser.hrefs:
+        candidate_url = urljoin(location, href)
+        candidate = urlparse(candidate_url)
+        if candidate.scheme != base.scheme or candidate.netloc != base.netloc:
+            continue
+        candidate_parent = candidate.path.rsplit("/", 1)[0] + "/"
+        if candidate_parent != base_path:
+            continue
+        filename = unquote(candidate.path.rsplit("/", 1)[-1])
+        if not filename:
+            continue
+        identity = _directory_deb_identity(filename)
+        candidates.append(
+            _DirectoryCandidate(
+                filename=filename[:500],
+                url=candidate_url,
+                is_deb=filename.lower().endswith(".deb"),
+                pattern_matches=bool(pattern.search(filename)),
+                identity=identity,
+            )
+        )
+    return candidates
+
+
+def _latest_directory_candidates(
+    candidates: list[_DirectoryCandidate],
+) -> list[_DirectoryCandidate]:
+    latest: dict[tuple[str, str], tuple[Version, _DirectoryCandidate]] = {}
+    for candidate in candidates:
+        if not candidate.pattern_matches or candidate.identity is None:
+            continue
+        package, version, architecture = candidate.identity
+        key = (package, architecture)
+        current = latest.get(key)
+        if current is None or current[0] < version:
+            latest[key] = (version, candidate)
+    return [item[1] for _, item in sorted(latest.items())]
+
+
+def _http_directory_assets(
+    client: httpx.Client, source: SourceRow
+) -> list[RemoteAsset]:
+    candidates = _http_directory_candidates(
+        client, source.location, source.asset_pattern
+    )
+    return [
+        RemoteAsset(
+            external_id=f"directory:{candidate.url}",
+            filename=candidate.filename,
+            url=candidate.url,
+        )
+        for candidate in _latest_directory_candidates(candidates)
+    ]
+
+
+def _probe_deb_response(
+    client: httpx.Client, url: str
+) -> tuple[int | None, str | None, bool, str | None]:
+    try:
+        with client.stream(
+            "GET",
+            url,
+            headers={
+                "Accept": "application/octet-stream",
+                "Range": "bytes=0-7",
+            },
+        ) as response:
+            response.raise_for_status()
+            prefix = bytearray()
+            for chunk in response.iter_bytes():
+                prefix.extend(chunk)
+                if len(prefix) >= 8:
+                    break
+            content_type = response.headers.get("content-type")
+            if bytes(prefix[:8]) != b"!<arch>\n":
+                actual = bytes(prefix[:8]).hex(" ") or "（空响应）"
+                return (
+                    response.status_code,
+                    content_type,
+                    False,
+                    f"响应开头为 {actual}，不是 Debian ar 文件",
+                )
+            return response.status_code, content_type, True, None
+    except httpx.HTTPStatusError as exc:
+        return (
+            exc.response.status_code,
+            exc.response.headers.get("content-type"),
+            False,
+            str(exc),
+        )
+    except httpx.RequestError as exc:
+        return None, None, False, str(exc)
+
+
+def preview_http_directory(
+    location: str,
+    asset_pattern: str,
+    *,
+    client: httpx.Client | None = None,
+    max_assets: int = 200,
+) -> DirectorySourcePreview:
+    """Preview directory matches and verify selected URLs return real .deb data."""
+    directory = normalize_direct_url(location)
+    if not urlparse(directory).path.endswith("/"):
+        raise ValueError("HTTP 目录地址必须以 / 结尾")
+    pattern_text = asset_pattern.strip() or r".*\.deb$"
+    try:
+        re.compile(pattern_text, re.IGNORECASE)
+    except re.error as exc:
+        raise ValueError(f"Asset 匹配表达式无效：{exc}") from exc
+
+    owned_client = client is None
+    if client is None:
+        client = httpx.Client(
+            headers={"User-Agent": USER_AGENT},
+            follow_redirects=True,
+            timeout=httpx.Timeout(30.0, connect=10.0),
+        )
+    try:
+        candidates = _http_directory_candidates(client, directory, pattern_text)
+        selected_urls = {
+            candidate.url for candidate in _latest_directory_candidates(candidates)
+        }
+        previews: list[DirectoryAssetPreview] = []
+        for candidate in candidates[:max_assets]:
+            selected = candidate.url in selected_urls
+            status: int | None = None
+            content_type: str | None = None
+            valid_deb: bool | None = None
+            error: str | None = None
+            if selected:
+                status, content_type, valid_deb, error = _probe_deb_response(
+                    client, candidate.url
+                )
+            identity = candidate.identity
+            previews.append(
+                DirectoryAssetPreview(
+                    filename=candidate.filename,
+                    version=str(identity[1]) if identity else None,
+                    architecture=identity[2] if identity else None,
+                    is_deb=candidate.is_deb,
+                    pattern_matches=candidate.pattern_matches,
+                    valid_filename=identity is not None,
+                    selected=selected,
+                    response_status=status,
+                    content_type=content_type,
+                    valid_deb=valid_deb,
+                    error=error,
+                )
+            )
+        return DirectorySourcePreview(
+            directory=directory,
+            assets=tuple(previews),
+            truncated=len(candidates) > max_assets,
+        )
+    finally:
+        if owned_client:
+            client.close()
+
+
+def preview_github_source(
+    location: str,
+    asset_pattern: str,
+    release_limit: str,
+    *,
+    include_prereleases: bool = False,
+    token: str | None = None,
+    client: httpx.Client | None = None,
+    max_assets: int = 200,
+) -> GitHubSourcePreview:
+    """Read GitHub metadata and show which assets a source would select."""
+    repository, pattern_text, limit = validate_github_probe_values(
+        location, asset_pattern, release_limit
+    )
+    headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": USER_AGENT,
+        "X-GitHub-Api-Version": "2022-11-28",
+    }
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    owned_client = client is None
+    if client is None:
+        client = httpx.Client(
+            headers=headers,
+            follow_redirects=True,
+            timeout=httpx.Timeout(30.0, connect=10.0),
+        )
+    else:
+        client.headers.update(headers)
+    try:
+        releases = _github_release_items(
+            client,
+            repository,
+            include_prereleases=include_prereleases,
+            release_limit=limit,
+        )
+        pattern = re.compile(pattern_text, re.IGNORECASE)
+        previews: list[GitHubAssetPreview] = []
+        truncated = False
+        for release in releases:
+            release_name = str(
+                release.get("tag_name") or release.get("name") or release.get("id") or "—"
+            )
+            for asset in release.get("assets") or []:
+                if not isinstance(asset, dict):
+                    continue
+                if len(previews) >= max_assets:
+                    truncated = True
+                    break
+                filename = str(asset.get("name") or "")[:500]
+                size = asset.get("size")
+                previews.append(
+                    GitHubAssetPreview(
+                        release=release_name[:200],
+                        filename=filename,
+                        size=int(size) if isinstance(size, int) else None,
+                        is_deb=filename.lower().endswith(".deb"),
+                        pattern_matches=bool(pattern.search(filename)),
+                    )
+                )
+            if truncated:
+                break
+        return GitHubSourcePreview(
+            repository=repository,
+            releases_checked=len(releases),
+            assets=tuple(previews),
+            truncated=truncated,
+        )
+    finally:
+        if owned_client:
+            client.close()
+
+
 def _filename_from_response(response: httpx.Response, fallback_url: str) -> str:
     disposition = response.headers.get("content-disposition", "")
     match = re.search(r"filename\*?=(?:UTF-8''|\")?([^\";]+)", disposition, re.IGNORECASE)
@@ -230,9 +605,40 @@ def _download(
         length = response.headers.get("content-length")
         if length and int(length) > cfg.max_upload_bytes:
             raise ValueError("远端软件包超过网站设置的单文件大小限制")
+
+        def validated_chunks():
+            prefix = bytearray()
+            validated = False
+            for chunk in response.iter_bytes(chunk_size=1024 * 1024):
+                if not chunk:
+                    continue
+                if not validated:
+                    prefix.extend(chunk)
+                    if len(prefix) < 8:
+                        continue
+                    if bytes(prefix[:8]) != b"!<arch>\n":
+                        content_type = response.headers.get("content-type", "未知")
+                        actual = bytes(prefix[:8]).hex(" ")
+                        raise ValueError(
+                            "下载响应不是 .deb"
+                            f"（HTTP {response.status_code}，Content-Type {content_type}，"
+                            f"开头 {actual}）"
+                        )
+                    validated = True
+                    yield bytes(prefix)
+                    prefix.clear()
+                    continue
+                yield chunk
+            if not validated:
+                content_type = response.headers.get("content-type", "未知")
+                raise ValueError(
+                    "下载响应不是 .deb"
+                    f"（HTTP {response.status_code}，Content-Type {content_type}，响应过短）"
+                )
+
         path = write_incoming_stream(
             cfg,
-            response.iter_bytes(chunk_size=1024 * 1024),
+            validated_chunks(),
             limit=cfg.max_upload_bytes,
         )
         return path, response
@@ -250,7 +656,10 @@ def _begin_artifact(
 ) -> tuple[int, str | None]:
     existing = _artifact_row(conn, source.id, asset.external_id)
     if existing is not None and existing["status"] in FINAL_ARTIFACT_STATUSES:
-        return int(existing["id"]), str(existing["status"])
+        manually_queued = source.last_status == "queued"
+        retryable_status = existing["status"] in {"rejected", "conflict"}
+        if not (manually_queued and retryable_status):
+            return int(existing["id"]), str(existing["status"])
     now = now_iso()
     conn.execute(
         """
@@ -455,7 +864,11 @@ def _execute_source(
         assets = _github_assets(client, source)
         errors = _process_assets(client, cfg, source, conn, assets, stats)
     elif source.kind == "direct_url":
-        errors = _sync_direct(client, cfg, source, conn, stats)
+        if urlparse(source.location).path.endswith("/"):
+            assets = _http_directory_assets(client, source)
+            errors = _process_assets(client, cfg, source, conn, assets, stats)
+        else:
+            errors = _sync_direct(client, cfg, source, conn, stats)
     else:
         raise RuntimeError(f"不支持的软件来源类型：{source.kind}")
     return stats, "; ".join(errors)[:2000] or None
@@ -481,7 +894,7 @@ def sync_source_once(
         token = decrypt_token(base_cfg, source.token_encrypted)
         headers = {
             "Accept": "application/vnd.github+json",
-            "User-Agent": "PrvAptMirror/0.0.2",
+            "User-Agent": USER_AGENT,
             "X-GitHub-Api-Version": "2022-11-28",
         }
         if token:

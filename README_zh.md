@@ -37,7 +37,7 @@ docker compose pull
 docker compose up -d
 ```
 
-`.env.example` 默认固定到 `0.0.1` 镜像，升级时请明确修改 `PRVAPT_IMAGE`。如需从本地源码构建：
+`.env.example` 默认固定到 `0.1.0` 镜像，升级时请明确修改 `PRVAPT_IMAGE`。如需从本地源码构建：
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.build.yml up --build
@@ -62,9 +62,11 @@ docker compose -f docker-compose.yml -f docker-compose.build.yml up --build
 目前支持两种来源：
 
 - **GitHub Releases**：填写 `owner/repository`、Asset 文件名正则、检查最近几个 Release、是否包含 prerelease，以及检查间隔。只下载同时匹配规则且以 `.deb` 结尾的 Asset。
-- **固定下载地址**：定期访问一个 HTTP(S) 地址。远端支持时使用 `ETag` 和 `Last-Modified` 条件请求，并使用内容摘要避免重复导入。
+- **固定下载地址或 HTTP 目录**：定期访问一个 `.deb` 地址；也可填写以 `/` 结尾的同源 HTML 目录，按 Asset 正则筛选，并按 Debian 版本规则选择每个包和架构的最新 `package_version_arch.deb`。固定文件在远端支持时使用 `ETag` 和 `Last-Modified` 条件请求，内容摘要可避免重复导入。
 
-每个来源都可在网页中新增、编辑、启用、停用、删除或“立即同步”。下载内容会流式写入 `data/incoming`，通过 Debian 软件包校验后整批导入，最后只重建和签名一次索引。完全相同的软件包会跳过；如果 Package、Version、Architecture 相同但内容摘要不同，会显示冲突，不会静默覆盖。检查失败会进行指数退避重试，最长不超过来源设置的正常检查间隔。
+每个来源都可在网页中新增、编辑、启用、停用、删除或“立即同步”。下载内容会流式写入 `data/incoming`，通过 Debian 软件包校验后整批导入，最后只重建和签名一次索引。完全相同的软件包会跳过；如果 Package、Version、Architecture 相同但内容摘要不同，会显示冲突，不会静默覆盖。手动“立即同步”会重试本次仍被选中的已拒绝/冲突文件，定时检查则跳过这些终态记录。检查失败会进行指数退避重试，最长不超过来源设置的正常检查间隔。
+
+新增或编辑 GitHub 或 HTTP 目录来源时，可先点击“测试获取与正则”。测试读取远端元数据但不保存来源，并逐项标明文件会被抓取、属于较旧版本、不是 `.deb`，还是未命中正则；目录测试还会探测最新版下载响应并验证 Debian ar 文件头。
 
 GitHub Token 为可选项，可用于私有仓库或提高 API 限额。Token 在写入数据库前会加密，之后不会在页面回显。加密密钥由 `data/secret-key` 派生，因此迁移或恢复时必须让它与 `data.sqlite` 一起保留。
 
@@ -84,7 +86,7 @@ docker compose exec app prvaptmirror-admin reset-password --username admin
 
 ## 容器版本发布
 
-推送到 `main` 会发布 `edge` 和 `sha-*` 镜像；推送 `v0.0.1` 这样的语义化 Git Tag，会发布正式版本标签（`0.0.1`、`0.0`、`0`）并更新 `latest`。已经发布的完整版本标签不得覆盖；生产环境应固定完整版本号，不建议直接使用 `latest`。
+推送到 `main` 会发布 `edge` 和 `sha-*` 镜像；推送 `v0.1.0` 这样的语义化 Git Tag，会发布正式版本标签（`0.1.0`、`0.1`、`0`）并更新 `latest`。已经发布的完整版本标签不得覆盖；生产环境应固定完整版本号，不建议直接使用 `latest`。
 
 ## 不使用 Docker
 

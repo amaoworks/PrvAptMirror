@@ -35,9 +35,22 @@ def test_parse_control_tar_zst(tmp_path: Path):
         tmp_path / "zst_1.0-1_all.deb",
         package="zstpkg",
         control_compress="zst",
+        zstd_write_content_size=False,
     )
     parsed = parse_deb(deb, allowed_archs=("amd64", "arm64", "all"))
     assert parsed.name == "zstpkg"
+
+
+def test_normalizes_ascii_uppercase_package_name_without_rewriting_deb(tmp_path: Path):
+    deb = build_deb(tmp_path / "Bettbox.deb", package="Bettbox")
+    original = deb.read_bytes()
+
+    parsed = parse_deb(deb, allowed_archs=("amd64", "arm64", "all"))
+
+    assert parsed.name == "bettbox"
+    assert parsed.control["Package"] == "bettbox"
+    assert parsed.warnings == ["normalized Package field from 'Bettbox' to 'bettbox'"]
+    assert deb.read_bytes() == original
 
 
 def test_discards_essential(tmp_path: Path):

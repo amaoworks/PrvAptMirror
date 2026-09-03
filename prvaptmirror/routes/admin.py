@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Annotated
 from urllib.parse import quote
 
+import httpx
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
@@ -56,6 +57,7 @@ from prvaptmirror.sources import (
     DEFAULT_ASSET_PATTERN,
     SourceValidationError,
     create_source,
+    decrypt_token,
     delete_source,
     get_source,
     list_sources,
@@ -73,6 +75,7 @@ from prvaptmirror.settings import (
     repository_settings_changed,
     save_app_config,
 )
+from prvaptmirror.source_sync import preview_github_source, preview_http_directory
 
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
@@ -568,6 +571,93 @@ async def source_create(
         conn.close()
     request.app.state.source_scheduler.wake()
     return RedirectResponse(f"/admin/sources/{source.id}?created=1", status_code=303)
+
+
+def _source_test_error(request: Request, message: str):
+    return templates.TemplateResponse(
+        request,
+        "source_test_result.html",
+        {"error": message, "preview": None},
+    )
+
+
+@router.post("/sources/test", response_class=HTMLResponse)
+async def source_test(
+    request: Request,
+    csrf_token: Annotated[str, Form()] = "",
+    source_id: Annotated[int, Form()] = 0,
+    kind: Annotated[str, Form()] = "",
+    location: Annotated[str, Form()] = "",
+    asset_pattern: Annotated[str, Form()] = "",
+    release_limit: Annotated[str, Form()] = "1",
+    include_prereleases: Annotated[str, Form()] = "",
+    token: Annotated[str, Form()] = "",
+    clear_token: Annotated[str, Form()] = "",
+):
+    user = current_user(request)
+    if user is None:
+        return HTMLResponse("请先登录", status_code=401)
+    cfg = _cfg(request)
+    if not verify_csrf(request, cfg, csrf_token, _csrf_expected(request, user)):
+        return HTMLResponse("CSRF 校验失败", status_code=403)
+    if user.must_change_password:
+        return HTMLResponse("请先修改初始密码", status_code=403)
+    is_github = kind == "github_release"
+    try:
+        if is_github:
+            test_token = token.strip()
+            if not test_token and source_id > 0 and clear_token != "yes":
+                conn = connect(cfg)
+                try:
+                    saved_source = get_source(conn, source_id)
+                    if saved_source is not None:
+                        test_token = decrypt_token(cfg, saved_source.token_encrypted) or ""
+                finally:
+                    conn.close()
+            preview = await asyncio.to_thread(
+                preview_github_source,
+                location,
+                asset_pattern,
+                release_limit,
+                include_prereleases=include_prereleases == "yes",
+                token=test_token,
+            )
+        elif kind == "direct_url" and location.strip().endswith("/"):
+            preview = await asyncio.to_thread(
+                preview_http_directory,
+                location,
+                asset_pattern,
+            )
+        elif kind == "direct_url":
+            return _source_test_error(request, "单个固定 .deb 地址无需目录匹配测试。")
+        else:
+            return _source_test_error(request, "不支持的软件来源类型。")
+    except SourceValidationError as exc:
+        return _source_test_error(request, str(exc))
+    except httpx.HTTPStatusError as exc:
+        status = exc.response.status_code
+        if not is_github:
+            message = f"HTTP 目录返回 {status}，请检查地址和访问权限。"
+        elif status == 401:
+            message = "GitHub 拒绝了凭据，请检查 Token。"
+        elif status == 403:
+            message = "GitHub 拒绝了请求，可能已达到 API 限额或 Token 权限不足。"
+        elif status == 404:
+            message = "找不到 GitHub 仓库；请检查地址，私有仓库还需要有效 Token。"
+        else:
+            message = f"GitHub API 返回 HTTP {status}。"
+        return _source_test_error(request, message)
+    except httpx.TimeoutException:
+        return _source_test_error(request, "连接远端超时，请稍后重试。")
+    except httpx.RequestError as exc:
+        return _source_test_error(request, f"连接远端失败：{str(exc)[:300]}")
+    except (RuntimeError, ValueError) as exc:
+        return _source_test_error(request, str(exc)[:500])
+    return templates.TemplateResponse(
+        request,
+        "source_test_result.html",
+        {"error": None, "preview": preview},
+    )
 
 
 @router.get("/sources/{source_id}", response_class=HTMLResponse)

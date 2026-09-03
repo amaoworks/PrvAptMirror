@@ -210,13 +210,144 @@ def test_source_configuration_ui_persists_in_database(client):
     assert "acme/example" in detail.text
     assert "private-token" not in detail.text
     assert "已配置；留空则保持不变" in detail.text
-    assert "GitHub 填写 <code>owner/repository</code>；固定地址填写完整 URL。" in detail.text
+    assert (
+        "GitHub 填写 <code>owner/repository</code>；HTTP 目录地址必须以 "
+        "<code>/</code> 结尾。"
+    ) in detail.text
     assert "保存后不再显示" in detail.text
 
     listing = client.get("/admin/sources")
     assert "GitHub example" in listing.text
     assert "已停用" in listing.text
     assert "后台调度器与网站运行在同一个容器内" not in listing.text
+
+
+def test_source_form_can_preview_github_asset_matches(client, monkeypatch):
+    from prvaptmirror.db import connect
+    from prvaptmirror.routes import admin as admin_routes
+    from prvaptmirror.source_sync import GitHubAssetPreview, GitHubSourcePreview
+
+    login(client)
+    page = client.get("/admin/sources/new")
+    assert "测试获取与正则" in page.text
+    assert 'hx-post="/admin/sources/test"' in page.text
+
+    def fake_preview(location, asset_pattern, release_limit, **options):
+        assert location == "https://github.com/acme/tool/releases/latest"
+        assert asset_pattern == r"_amd64\.deb$"
+        assert release_limit == "1"
+        assert options["include_prereleases"] is False
+        assert options["token"] == "temporary-token"
+        return GitHubSourcePreview(
+            repository="acme/tool",
+            releases_checked=1,
+            assets=(
+                GitHubAssetPreview("v2.0.0", "tool_2.0.0_amd64.deb", 1024, True, True),
+                GitHubAssetPreview("v2.0.0", "tool_2.0.0_arm64.deb", 2048, True, False),
+                GitHubAssetPreview("v2.0.0", "checksums.txt", 128, False, False),
+            ),
+        )
+
+    monkeypatch.setattr(admin_routes, "preview_github_source", fake_preview)
+    response = client.post(
+        "/admin/sources/test",
+        data={
+            "csrf_token": _csrf(page.text),
+            "kind": "github_release",
+            "location": "https://github.com/acme/tool/releases/latest",
+            "asset_pattern": r"_amd64\.deb$",
+            "release_limit": "1",
+            "token": "temporary-token",
+        },
+        headers=ORIGIN_HEADERS,
+    )
+    assert response.status_code == 200
+    assert "1 个将被抓取" in response.text
+    assert "tool_2.0.0_amd64.deb" in response.text
+    assert "将抓取" in response.text
+    assert "正则未命中" in response.text
+    assert "不是 .deb" in response.text
+    assert "temporary-token" not in response.text
+    conn = connect(client.app.state.base_cfg)
+    assert conn.execute("SELECT count(*) FROM package_sources").fetchone()[0] == 0
+    conn.close()
+
+
+def test_source_form_can_preview_http_directory_and_download_probe(client, monkeypatch):
+    from prvaptmirror.routes import admin as admin_routes
+    from prvaptmirror.source_sync import DirectoryAssetPreview, DirectorySourcePreview
+
+    login(client)
+    page = client.get("/admin/sources/new")
+    directory = "https://deb.example.test/pool/tool/"
+
+    def fake_preview(location, asset_pattern):
+        assert location == directory
+        assert asset_pattern == r"^tool_.*_all\.deb$"
+        return DirectorySourcePreview(
+            directory=directory,
+            assets=(
+                DirectoryAssetPreview(
+                    filename="tool_1.0_all.deb",
+                    version="1.0",
+                    architecture="all",
+                    is_deb=True,
+                    pattern_matches=True,
+                    valid_filename=True,
+                    selected=False,
+                ),
+                DirectoryAssetPreview(
+                    filename="tool_2.0_all.deb",
+                    version="2.0",
+                    architecture="all",
+                    is_deb=True,
+                    pattern_matches=True,
+                    valid_filename=True,
+                    selected=True,
+                    response_status=200,
+                    content_type="application/vnd.debian.binary-package",
+                    valid_deb=True,
+                ),
+            ),
+        )
+
+    monkeypatch.setattr(admin_routes, "preview_http_directory", fake_preview)
+    response = client.post(
+        "/admin/sources/test",
+        data={
+            "csrf_token": _csrf(page.text),
+            "kind": "direct_url",
+            "location": directory,
+            "asset_pattern": r"^tool_.*_all\.deb$",
+            "release_limit": "1",
+        },
+        headers=ORIGIN_HEADERS,
+    )
+
+    assert response.status_code == 200
+    assert "选中 1 个最新版" in response.text
+    assert "1 个通过下载验证" in response.text
+    assert "tool_2.0_all.deb" in response.text
+    assert "最新版，可导入" in response.text
+    assert "较旧版本" in response.text
+
+
+def test_source_preview_shows_regex_validation_without_requesting_github(client):
+    login(client)
+    page = client.get("/admin/sources/new")
+    response = client.post(
+        "/admin/sources/test",
+        data={
+            "csrf_token": _csrf(page.text),
+            "kind": "github_release",
+            "location": "acme/tool",
+            "asset_pattern": "[",
+            "release_limit": "1",
+        },
+        headers=ORIGIN_HEADERS,
+    )
+    assert response.status_code == 200
+    assert "Asset 匹配表达式无效" in response.text
 
 
 def test_source_manual_sync_is_queued_from_ui(client):
