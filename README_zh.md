@@ -31,21 +31,23 @@ chmod +x scripts/start.sh
 手动使用 Compose：
 
 ```bash
-mkdir -p data && sudo chown 1000:1000 data
+mkdir -p data && sudo chown -R 1000:1000 data
 cp .env.example .env
 docker compose pull
 docker compose up -d
 ```
 
-`.env.example` 默认固定到 `0.1.0` 镜像，升级时请明确修改 `PRVAPT_IMAGE`。如需从本地源码构建：
+`.env.example` 默认固定到 `0.1.1` 镜像，升级时请明确修改 `PRVAPT_IMAGE`。如需从本地源码构建：
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.build.yml up --build
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 ```
 
 - 后台：http://127.0.0.1:8000/admin/
 - apt 源：http://127.0.0.1:8000/apt/
 - 未显式指定首次密码时，生成的初始密码会写入 `data/admin-bootstrap.txt`（权限 0600），首次登录后必须修改。
+
+已有数据迁移前先停服务，并递归修正整个数据目录的属主；应用启动会检查索引目录是否可写。容器运行用户固定为 `1000:1000`。
 
 如需 HTTPS，可在宿主机用 Caddy / Traefik / nginx 反代到该端口。
 
@@ -86,7 +88,7 @@ docker compose exec app prvaptmirror-admin reset-password --username admin
 
 ## 容器版本发布
 
-推送到 `main` 会发布 `edge` 和 `sha-*` 镜像；推送 `v0.1.0` 这样的语义化 Git Tag，会发布正式版本标签（`0.1.0`、`0.1`、`0`）并更新 `latest`。已经发布的完整版本标签不得覆盖；生产环境应固定完整版本号，不建议直接使用 `latest`。
+推送到 `main` 会发布 `edge` 和 `sha-*` 镜像；推送 `v0.1.1` 这样的语义化 Git Tag，会发布正式版本标签（`0.1.1`、`0.1`、`0`）并更新 `latest`。已经发布的完整版本标签不得覆盖；生产环境应固定完整版本号，不建议直接使用 `latest`。
 
 ## 不使用 Docker
 
@@ -111,10 +113,29 @@ export PRVAPT_DATA_DIR=$PWD/data
 
 可选的官方 apt 客户端联调：`tests/integration/test_apt_client.sh`（需要 Docker，且服务已启动）。
 
-## 备份
+## 备份与恢复
+
+备份保存到映射在宿主机的 `data/backups`，容器重建后仍保留。每次使用新目录；备份期间上传、删除和发布会等待备份完成，网站读取仍可用。
 
 ```bash
-docker compose exec app /app/scripts/backup.sh /tmp/prvapt-backup
+backup_name="prvapt-$(date -u +%Y%m%dT%H%M%SZ)"
+docker compose exec -T app /app/scripts/backup.sh "/var/lib/prvaptmirror/backups/$backup_name"
+# 再导出一份到独立目录，可继续复制到其他主机或备份存储。
+mkdir -p backups
+docker compose cp "app:/var/lib/prvaptmirror/backups/$backup_name" ./backups/
 ```
 
-`scripts/backup.sh` 依赖镜像内的 `sqlite3`，会备份 `data.sqlite`、`repo/pool`、`gnupg/` 与 `secret-key`。备份中包含签名私钥和来源凭据的加密密钥，应按敏感文件保存。恢复前请先停掉应用（`scripts/restore.sh`）。
+脚本使用 Python 标准库，在发布锁内一起备份 `data.sqlite`、`repo/pool`、`gnupg/` 和 `secret-key`，并验证包摘要。备份完整写入后才出现在目标路径，包含数据库和归档的 SHA-256 校验文件。备份包含签名私钥和来源凭据加密密钥，目录权限为 0700，文件为 0600。
+
+在项目目录执行恢复（宿主机需 Python 3.11+ 和 Docker Compose）：
+
+```bash
+sudo ./scripts/restore.sh "./backups/$backup_name"
+docker compose up -d
+```
+
+恢复脚本从 Compose 解析实际数据目录，先停止 `app`；停止失败立即退出。它会校验备份、在旁边构建干净的数据目录，清除旧索引/WAL 的影响，设置重建标记并恢复 UID/GID 1000 的权限，最后原子替换数据目录。旧数据保留在输出的 `.data.before-restore-*` 路径；确认恢复成功后自行归档或删除。需要足够空间同时保存旧数据和恢复数据。首次启动重新生成并签名索引，恢复期间请勿另行启动应用。
+
+如果之前使用 `scripts/start.sh` 的 `.env.runtime` 配置，恢复时增加 `--compose-env-file .env.runtime`。非 Docker 部署需先停止进程，再显式使用 `--offline --data-dir /实际数据目录 --uid 用户UID --gid 用户GID`；运行中的新版应用持有服务锁，会阻止覆盖恢复。
+
+导入时如果数据库写入失败，新建的包文件会回滚；崩溃遗留的未登记包会在启动时移到 `data/quarantine`，保留供检查，并可重新上传原包。上传请求在接收文件前验证登录，文件按块写入；control 归档压缩前后各限制为 16 MiB，control 文本限制为 1 MiB，解码器窗口/内存上限为 64 MiB。

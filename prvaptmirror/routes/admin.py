@@ -10,7 +10,10 @@ from typing import Annotated
 from urllib.parse import quote
 
 import httpx
-from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
+from fastapi import APIRouter, Depends, Form, Request
+from starlette.concurrency import run_in_threadpool
+from starlette.datastructures import UploadFile
+from starlette.exceptions import HTTPException
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 
@@ -27,6 +30,7 @@ from prvaptmirror.csrf import (
     COOKIE as CSRF_COOKIE,
     FORM_FIELD,
     issue_anon_token,
+    origin_allowed,
     session_token,
     set_csrf_cookie,
     verify_csrf,
@@ -53,6 +57,7 @@ from prvaptmirror.publish import (
 from prvaptmirror.ratelimit import client_ip, cookie_secure_flag, is_locked, record_attempt
 from prvaptmirror.snippets import deb822_snippet, oneline_snippet
 from prvaptmirror.storage import DiskFullError, disk_preflight, write_incoming_stream
+from prvaptmirror.uploads import bounded_upload_form
 from prvaptmirror.sources import (
     DEFAULT_ASSET_PATTERN,
     SourceValidationError,
@@ -953,86 +958,77 @@ def package_detail(request: Request, package_id: int):
 
 
 @router.post("/packages/upload")
-async def upload_packages(
-    request: Request,
-    csrf_token: Annotated[str, Form()] = "",
-    files: list[UploadFile] = File(default=[]),
-):
-    user = current_user(request)
+async def upload_packages(request: Request):
+    # No Form/File parameters: authentication must precede multipart parsing.
+    user = await run_in_threadpool(current_user, request)
     if user is None:
         return RedirectResponse("/admin/login", status_code=303)
-    cfg = _cfg(request)
-    expected = _csrf_expected(request, user)
-    if not verify_csrf(request, cfg, csrf_token, expected):
-        return HTMLResponse("CSRF 校验失败", status_code=403)
     if user.must_change_password:
         return RedirectResponse("/admin/password", status_code=303)
-    uploads = [f for f in files if f.filename]
-    if not uploads:
-        return RedirectResponse("/admin/packages?err=nofile", status_code=303)
-    if len(uploads) > cfg.max_upload_files:
-        return RedirectResponse("/admin/packages?err=too_many", status_code=303)
+    cfg = _cfg(request)
+    if not origin_allowed(request, cfg):
+        return HTMLResponse("CSRF 校验失败", status_code=403)
     incoming_paths: list[Path] = []
     items = []
     try:
-        total = 0
-        for up in uploads:
-            name = up.filename or "upload.deb"
-            if not name.lower().endswith(".deb"):
-                emit("upload_reject", reason="extension", filename=name)
-                return RedirectResponse("/admin/packages?err=notdeb", status_code=303)
-            chunks = []
-            size = 0
-            while True:
-                chunk = await up.read(1024 * 1024)
-                if not chunk:
-                    break
-                size += len(chunk)
-                total += len(chunk)
-                if size > cfg.max_upload_bytes or total > cfg.max_upload_bytes:
+        async with bounded_upload_form(request, limit=cfg.max_upload_bytes, max_files=cfg.max_upload_files) as form:
+            token = form.get("csrf_token", "")
+            if not isinstance(token, str) or not verify_csrf(request, cfg, token, _csrf_expected(request, user)):
+                return HTMLResponse("CSRF 校验失败", status_code=403)
+            uploads = [up for up in form.getlist("files") if isinstance(up, UploadFile) and up.filename]
+            if not uploads:
+                return RedirectResponse("/admin/packages?err=nofile", status_code=303)
+            total = 0
+            for up in uploads:
+                name = up.filename
+                if not name.lower().endswith(".deb"):
+                    emit("upload_reject", reason="extension", filename=name)
+                    return RedirectResponse("/admin/packages?err=notdeb", status_code=303)
+
+                def prepare_file():
+                    chunks = iter(lambda: up.file.read(1024 * 1024), b"")
+                    path = write_incoming_stream(cfg, chunks, limit=cfg.max_upload_bytes - total)
+                    try:
+                        parsed = parse_deb(path, allowed_archs=cfg.architectures)
+                    except BaseException:
+                        path.unlink(missing_ok=True)
+                        raise
+                    return path, parsed
+
+                try:
+                    path, parsed = await run_in_threadpool(prepare_file)
+                except DebParseError as exc:
+                    emit("upload_reject", reason=str(exc), filename=name)
+                    return RedirectResponse("/admin/packages?err=" + quote(str(exc), safe=""), status_code=303)
+                except ValueError:
                     return HTMLResponse("上传超过大小限制", status_code=413)
-                chunks.append(chunk)
-            data = b"".join(chunks)
-
-            def stream():
-                yield data
-
-            path = write_incoming_stream(cfg, stream(), limit=cfg.max_upload_bytes)
-            incoming_paths.append(path)
-            try:
-                parsed = parse_deb(path, allowed_archs=cfg.architectures)
-            except DebParseError as exc:
-                path.unlink(missing_ok=True)
-                emit("upload_reject", reason=str(exc), filename=name)
-                return RedirectResponse(
-                    "/admin/packages?err=" + quote(str(exc), safe=""),
-                    status_code=303,
-                )
-            items.append((parsed, path))
-        disk_preflight(cfg.repo_dir, total)
+                incoming_paths.append(path)
+                total += parsed.size
+                items.append((parsed, path))
 
         def work():
+            disk_preflight(cfg.repo_dir, total)
             conn = connect(cfg)
             try:
                 return upload_commit(cfg, conn, items, user_id=user.id)
             finally:
                 conn.close()
 
-        loop = asyncio.get_running_loop()
-        results, pub = await loop.run_in_executor(None, work)
+        results, pub = await run_in_threadpool(work)
         if any(not r["ok"] and r.get("error") == "duplicate" for r in results) and not any(
             r["ok"] for r in results
         ):
             return RedirectResponse("/admin/packages?err=duplicate", status_code=409)
         return RedirectResponse("/admin/packages?ok=1", status_code=303)
     except DiskFullError:
-        for path in incoming_paths:
-            path.unlink(missing_ok=True)
         return HTMLResponse("磁盘空间不足", status_code=507)
-    except Exception:
+    except HTTPException as exc:
+        if exc.status_code == 400 and str(exc.detail).startswith("Too many files."):
+            return RedirectResponse("/admin/packages?err=too_many", status_code=303)
+        raise
+    finally:
         for path in incoming_paths:
             path.unlink(missing_ok=True)
-        raise
 
 
 @router.get("/packages/{package_id}/download")

@@ -31,21 +31,23 @@ chmod +x scripts/start.sh
 Manual Compose:
 
 ```bash
-mkdir -p data && sudo chown 1000:1000 data
+mkdir -p data && sudo chown -R 1000:1000 data
 cp .env.example .env
 docker compose pull
 docker compose up -d
 ```
 
-`.env.example` pins the `0.1.0` image. Change `PRVAPT_IMAGE` explicitly when upgrading. To build locally instead:
+`.env.example` pins the `0.1.1` image. Change `PRVAPT_IMAGE` explicitly when upgrading. To build locally instead:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.build.yml up --build
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 ```
 
 - Admin: http://127.0.0.1:8000/admin/
 - Apt: http://127.0.0.1:8000/apt/
 - When no initial password is specified, the generated password is written to `data/admin-bootstrap.txt` (mode 0600) and must be changed on first login.
+
+Stop an existing instance before migrating data and recursively fix ownership of the entire data directory. Startup checks that index directories are writable. The container runs as `1000:1000`.
 
 Put Caddy / Traefik / host nginx in front of that port if you need HTTPS.
 
@@ -86,7 +88,7 @@ docker compose exec app prvaptmirror-admin reset-password --username admin
 
 ## Container releases
 
-Pushing to `main` publishes `edge` and `sha-*` images. Pushing a semantic Git tag such as `v0.1.0` publishes release tags (`0.1.0`, `0.1`, `0`) and updates `latest`. Released full-version tags must not be overwritten. Production deployments should pin the full version instead of using `latest`.
+Pushing to `main` publishes `edge` and `sha-*` images. Pushing a semantic Git tag such as `v0.1.1` publishes release tags (`0.1.1`, `0.1`, `0`) and updates `latest`. Released full-version tags must not be overwritten. Production deployments should pin the full version instead of using `latest`.
 
 ## Without Docker
 
@@ -111,10 +113,29 @@ Copy the snippet from the admin **Client setup** page. It installs the ASCII-arm
 
 Optional official-apt client: `tests/integration/test_apt_client.sh` (needs Docker and a running instance).
 
-## Backup
+## Backup and restore
+
+Store backups under the bind-mounted `data/backups` so they survive container recreation. Use a new destination each time. Uploads, deletions, and publishing wait for the backup lock; HTTP reads remain available.
 
 ```bash
-docker compose exec app /app/scripts/backup.sh /tmp/prvapt-backup
+backup_name="prvapt-$(date -u +%Y%m%dT%H%M%SZ)"
+docker compose exec -T app /app/scripts/backup.sh "/var/lib/prvaptmirror/backups/$backup_name"
+# Export another copy for separate or off-host storage.
+mkdir -p backups
+docker compose cp "app:/var/lib/prvaptmirror/backups/$backup_name" ./backups/
 ```
 
-`scripts/backup.sh` needs `sqlite3` (installed in the image) and dumps `data.sqlite` plus `repo/pool`, `gnupg/`, and `secret-key`. Treat the backup as sensitive because it contains signing keys and encrypted-source key material. Restore stops the app first (`scripts/restore.sh`).
+The script uses the Python standard library to snapshot `data.sqlite`, `repo/pool`, `gnupg/`, and `secret-key` under the publish lock and verify package hashes. Only a completed backup appears at the destination. SHA-256 checksums cover the database and archive. Backups contain signing keys and source-credential encryption keys; directories use mode 0700 and files 0600.
+
+Run restoration from the project directory on a host with Python 3.11+ and Docker Compose:
+
+```bash
+sudo ./scripts/restore.sh "./backups/$backup_name"
+docker compose up -d
+```
+
+Restore resolves the actual data bind mount from Compose and stops `app`; a failed stop aborts restoration. It validates the backup, prepares a clean sibling directory without stale indexes or WAL files, marks the repository for rebuilding, restores UID/GID 1000 ownership, and atomically exchanges the directories. The previous data is retained at the printed `.data.before-restore-*` path. Archive or remove it after confirming recovery. Allow disk space for both datasets. Startup rebuilds and signs the indexes; do not start another instance during restoration.
+
+If you used `scripts/start.sh` with `.env.runtime`, add `--compose-env-file .env.runtime` when restoring. For native deployments, stop the process first and explicitly pass `--offline --data-dir /actual/data --uid USER_UID --gid USER_GID`. Running instances of the updated application hold a service lock that prevents restore.
+
+Failed database imports roll back newly created package files. Startup moves unregistered crash leftovers to `data/quarantine` for inspection; the original package can be uploaded again. Upload authentication runs before receiving files, which are copied in chunks. Compressed and decompressed control archives are each limited to 16 MiB, control text to 1 MiB, and decoder windows/memory to 64 MiB.

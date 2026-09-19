@@ -14,6 +14,7 @@ from prvaptmirror.auth import bootstrap_admin
 from prvaptmirror.config import ensure_data_dirs, load_config, validate_startup
 from prvaptmirror.db import connect, get_setting, init_db, set_setting
 from prvaptmirror.events import emit
+from prvaptmirror.filesystem import file_lock
 from prvaptmirror.publish import publish_lock, publish_unlocked, startup_reconcile
 from prvaptmirror.routes.admin import router as admin_router
 from prvaptmirror.routes.health import router as health_router
@@ -27,20 +28,31 @@ STATIC_DIR = Path(__file__).resolve().parent / "static"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    with file_lock(app.state.base_cfg.data_dir / "service.lock", shared=True, blocking=False):
+        async with running_app(app):
+            yield
+
+
+@asynccontextmanager
+async def running_app(app: FastAPI):
     base_cfg = app.state.base_cfg
     validate_startup(base_cfg)
     ensure_data_dirs(base_cfg)
-    conn = init_db(base_cfg)
+    conn = None
     try:
-        ensure_app_settings(conn, base_cfg)
-        cfg = load_app_config(base_cfg, conn)
-        app.state.cfg = cfg
-        bootstrap_admin(cfg, conn)
-        try:
-            ensure_key(cfg, conn)
-        except SigningError as exc:
-            emit("gpg_bootstrap_fail", error=str(exc))
-            raise
+        # Backups must not observe a database snapshot from before key creation
+        # together with a keyring captured halfway through initialization.
+        with publish_lock(base_cfg):
+            conn = init_db(base_cfg)
+            ensure_app_settings(conn, base_cfg)
+            cfg = load_app_config(base_cfg, conn)
+            app.state.cfg = cfg
+            bootstrap_admin(cfg, conn)
+            try:
+                ensure_key(cfg, conn)
+            except SigningError as exc:
+                emit("gpg_bootstrap_fail", error=str(exc))
+                raise
         if get_setting(conn, SETTINGS_PENDING_KEY, "0") == "1":
             with publish_lock(cfg):
                 recovery = publish_unlocked(cfg, conn)
@@ -50,7 +62,8 @@ async def lifespan(app: FastAPI):
         gc_incoming(cfg)
         startup_reconcile(cfg, conn)
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
     scheduler = SourceScheduler(base_cfg)
     app.state.source_scheduler = scheduler
     await scheduler.start()

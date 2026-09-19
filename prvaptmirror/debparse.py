@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gzip
+import bz2
 import hashlib
 import io
 import json
@@ -16,6 +17,11 @@ import zstandard
 from debian.debian_support import Version
 
 PACKAGE_RE = re.compile(r"^[a-z0-9][a-z0-9+.-]+$")
+# Limits apply independently of the compressed .deb upload/download limit.
+MAX_CONTROL_ARCHIVE_BYTES = 16 * 1024 * 1024
+MAX_CONTROL_TEXT_BYTES = 1024 * 1024
+MAX_AR_MEMBERS = 128
+MAX_DECODER_MEMORY = 64 * 1024 * 1024
 ALLOWED_CONTENT_TYPES = {
     "application/vnd.debian.binary-package",
     "application/x-debian-package",
@@ -87,7 +93,9 @@ def hash_file(path: Path) -> tuple[int, str, str, str]:
 def _read_ar_members(path: Path) -> list[tuple[str, bytes | None]]:
     """Return (name, data) for debian-binary and control.tar*; data.tar is skipped."""
     members: list[tuple[str, bytes | None]] = []
+    metadata_members: set[str] = set()
     with path.open("rb") as fh:
+        file_size = path.stat().st_size
         magic = fh.read(8)
         if magic != b"!<arch>\n":
             raise DebParseError("不是 Unix ar 归档（.deb 必须以 !<arch> 开头）")
@@ -97,13 +105,24 @@ def _read_ar_members(path: Path) -> list[tuple[str, bytes | None]]:
                 break
             if len(hdr) < 60:
                 raise DebParseError("ar 头截断")
+            if hdr[58:60] != b"`\n" or len(members) >= MAX_AR_MEMBERS:
+                raise DebParseError("ar 头非法或成员过多")
             raw_name = hdr[0:16].decode("ascii", "replace").strip()
             name = raw_name.rstrip("/")
             try:
                 size = int(hdr[48:58].strip() or b"0")
             except ValueError as exc:
                 raise DebParseError("ar 成员 size 非法") from exc
+            if size < 0 or fh.tell() + size + size % 2 > file_size:
+                raise DebParseError(f"ar 成员 {name} 截断或 size 非法")
             if name.startswith("debian-binary") or name.startswith("control.tar"):
+                kind = "debian-binary" if name.startswith("debian-binary") else "control.tar"
+                if kind in metadata_members:
+                    raise DebParseError(f"重复的 {kind} 成员")
+                metadata_members.add(kind)
+                limit = 16 if name.startswith("debian-binary") else MAX_CONTROL_ARCHIVE_BYTES
+                if size > limit:
+                    raise DebParseError(f"ar 成员 {name} 超过大小限制")
                 data = fh.read(size)
                 if len(data) != size:
                     raise DebParseError(f"ar 成员 {name} 截断")
@@ -118,39 +137,50 @@ def _read_ar_members(path: Path) -> list[tuple[str, bytes | None]]:
 
 def _decompress_tar(name: str, blob: bytes) -> bytes:
     lower = name.lower()
+    limit = MAX_CONTROL_ARCHIVE_BYTES
+    stream = io.BytesIO(blob)
     if lower.endswith(".tar.zst") or lower.endswith(".tar.zstd"):
         try:
             # Zstd frames are allowed to omit their decompressed content size.
             # The one-shot ``decompress`` API rejects those otherwise-valid
             # frames, while the streaming API handles both frame variants.
-            with zstandard.ZstdDecompressor().stream_reader(
-                io.BytesIO(blob)
+            with zstandard.ZstdDecompressor(max_window_size=MAX_DECODER_MEMORY).stream_reader(
+                stream
             ) as reader:
-                return reader.read()
+                result = reader.read(limit + 1)
         except zstandard.ZstdError as exc:
             raise DebParseError("无法解压 control.tar.zst（损坏或内部错误）") from exc
-    if lower.endswith(".tar.gz") or lower.endswith(".tar.gzip"):
-        return gzip.decompress(blob)
-    if lower.endswith(".tar.xz"):
-        return lzma.decompress(blob)
-    if lower.endswith(".tar.bz2"):
-        import bz2
-
-        return bz2.decompress(blob)
-    if lower.endswith(".tar"):
-        return blob
-    raise DebParseError(f"不支持的 control 压缩: {name}")
+    elif lower.endswith(".tar.gz") or lower.endswith(".tar.gzip"):
+        with gzip.GzipFile(fileobj=stream) as reader:
+            result = reader.read(limit + 1)
+    elif lower.endswith(".tar.xz"):
+        decoder = lzma.LZMADecompressor(memlimit=MAX_DECODER_MEMORY)
+        result = decoder.decompress(blob, max_length=limit + 1)
+        if len(result) <= limit and not decoder.eof:
+            raise DebParseError("control.tar.xz 截断")
+    elif lower.endswith(".tar.bz2"):
+        with bz2.BZ2File(stream) as reader:
+            result = reader.read(limit + 1)
+    elif lower.endswith(".tar"):
+        result = blob
+    else:
+        raise DebParseError(f"不支持的 control 压缩: {name}")
+    if len(result) > limit:
+        raise DebParseError("control.tar 解压后超过大小限制")
+    return result
 
 
 def _control_from_tar(tar_bytes: bytes) -> bytes:
     with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r:") as tf:
-        for member in tf.getmembers():
+        for member in tf:
             base = member.name.split("/")[-1]
             if base == "control" and member.isfile():
+                if member.size > MAX_CONTROL_TEXT_BYTES:
+                    raise DebParseError("control 文件超过大小限制")
                 extracted = tf.extractfile(member)
                 if extracted is None:
                     break
-                return extracted.read()
+                return extracted.read(MAX_CONTROL_TEXT_BYTES + 1)
     raise DebParseError("control.tar 中没有 control 文件")
 
 

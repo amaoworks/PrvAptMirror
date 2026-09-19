@@ -4,17 +4,18 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "prvaptmirror"
-version = "0.1.0"
+version = "0.1.1"
 description = "Personal signed apt repository with a password-protected admin UI"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "PrvAptMirror" }]
 dependencies = [
-    "fastapi>=0.115.0",
+    "fastapi>=0.116.1",
+    "starlette>=0.47.2",
     "uvicorn[standard]>=0.32.0",
     "jinja2>=3.1.4",
-    "python-multipart>=0.0.12",
+    "python-multipart>=0.0.18",
     "python-debian>=0.1.49",
     "zstandard>=0.23.0",
     "argon2-cffi>=23.1.0",

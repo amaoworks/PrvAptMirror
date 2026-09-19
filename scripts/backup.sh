@@ -1,18 +1,10 @@
 #!/bin/sh
 set -eu
-DATA_DIR="${PRVAPT_DATA_DIR:-/var/lib/prvaptmirror}"
-DEST="${1:-}"
-if [ -z "$DEST" ]; then
-  echo "usage: backup.sh DEST_DIR" >&2
-  exit 2
+ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+PYTHON="${PRVAPT_PYTHON:-python3}"
+if [ -z "${PRVAPT_PYTHON:-}" ] && [ -x "$ROOT/.venv/bin/python" ]; then
+  PYTHON="$ROOT/.venv/bin/python"
 fi
-mkdir -p "$DEST"
-sqlite3 "$DATA_DIR/data.sqlite" ".backup $DEST/data.sqlite"
-tar --exclude=repo/dists --exclude='gnupg/S.*' \
-  -C "$DATA_DIR" -czf "$DEST/pool-and-meta.tgz" repo/pool gnupg secret-key
-{
-  echo "packages=$(sqlite3 "$DATA_DIR/data.sqlite" "select count(*) from packages")"
-  echo "fingerprint=$(sqlite3 "$DATA_DIR/data.sqlite" "select value from settings where key='gpg_fingerprint'")"
-  sqlite3 "$DATA_DIR/data.sqlite" "select sha256, filename from packages order by filename"
-} > "$DEST/manifest.txt"
-echo "backup written to $DEST"
+# Keep caller-relative backup paths and Compose project/env configuration.
+export PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"
+exec "$PYTHON" -m prvaptmirror.maintenance backup "$@"

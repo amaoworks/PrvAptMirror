@@ -194,3 +194,14 @@ def ensure_data_dirs(cfg: Config) -> None:
     os.chmod(cfg.repo_dir, 0o755)
     (cfg.repo_dir / "pool").mkdir(exist_ok=True)
     os.chmod(cfg.repo_dir / "pool", 0o755)
+    # Compose runs as a non-root user. Fail before publishing when a previous
+    # root-run instance or restore left directories that cannot be cleaned up.
+    for root in (cfg.pool_dir, cfg.dists_dir, cfg.repo_dir / "dists.next"):
+        if not root.exists():
+            continue
+        for directory, _, _ in os.walk(root):
+            if not os.access(directory, os.W_OK | os.X_OK):
+                raise RuntimeError(
+                    f"data directory is not writable: {directory}; on the host run "
+                    f"sudo chown -R {os.getuid()}:{os.getgid()} <host-data-dir>"
+                )

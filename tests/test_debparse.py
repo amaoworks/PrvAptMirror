@@ -80,3 +80,63 @@ def test_rejects_missing_control(tmp_path: Path):
     deb.write_bytes(data + b"xxxx")
     with pytest.raises(DebParseError):
         parse_deb(deb)
+
+
+@pytest.mark.parametrize("compression", ["gz", "xz", "bz2", "zst", "tar"])
+def test_control_decompression_has_a_hard_output_limit(monkeypatch, compression):
+    import bz2
+    import gzip
+    import lzma
+    import zstandard
+    from prvaptmirror import debparse
+
+    raw = b"x" * (128 * 1024)
+    encode = {
+        "gz": gzip.compress, "xz": lzma.compress, "bz2": bz2.compress,
+        "zst": zstandard.ZstdCompressor(write_content_size=False).compress, "tar": lambda data: data,
+    }[compression]
+    monkeypatch.setattr(debparse, "MAX_CONTROL_ARCHIVE_BYTES", 64 * 1024)
+    name = "control.tar" + ("" if compression == "tar" else "." + compression)
+    with pytest.raises(DebParseError, match="超过大小限制"):
+        debparse._decompress_tar(name, encode(raw))
+
+
+def test_rejects_oversized_compressed_member_before_reading(tmp_path, monkeypatch):
+    from prvaptmirror import debparse
+    deb = build_deb(tmp_path / "oversized.deb")
+    monkeypatch.setattr(debparse, "MAX_CONTROL_ARCHIVE_BYTES", 32)
+    with pytest.raises(DebParseError, match="ar 成员 control.*超过大小限制"):
+        parse_deb(deb)
+
+
+def test_rejects_oversized_control_text(tmp_path, monkeypatch):
+    from prvaptmirror import debparse
+    deb = build_deb(tmp_path / "long-control.deb", description="x" * 4096)
+    monkeypatch.setattr(debparse, "MAX_CONTROL_TEXT_BYTES", 1024)
+    with pytest.raises(DebParseError, match="control 文件超过大小限制"):
+        parse_deb(deb)
+
+
+def test_zstd_window_memory_is_bounded(monkeypatch):
+    import zstandard
+    from prvaptmirror import debparse
+    blob = zstandard.ZstdCompressor(write_content_size=False).compress(b"x" * (1024 * 1024))
+    monkeypatch.setattr(debparse, "MAX_DECODER_MEMORY", 64 * 1024)
+    with pytest.raises(DebParseError):
+        debparse._decompress_tar("control.tar.zst", blob)
+
+
+def test_rejects_truncated_skipped_ar_member(tmp_path):
+    deb = build_deb(tmp_path / "truncated.deb")
+    deb.write_bytes(deb.read_bytes()[:-20])
+    with pytest.raises(DebParseError, match="截断"):
+        parse_deb(deb)
+
+
+def test_duplicate_control_archives_cannot_accumulate_in_memory(tmp_path):
+    from tests.deb_builder import _ar_member
+    deb = build_deb(tmp_path / "duplicate-control.deb")
+    with deb.open("ab") as stream:
+        stream.write(_ar_member("control.tar", b"x" * 1024))
+    with pytest.raises(DebParseError, match="重复的 control.tar"):
+        parse_deb(deb)

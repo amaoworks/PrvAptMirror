@@ -3,15 +3,16 @@
 from __future__ import annotations
 
 import os
-import sqlite3
 import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
 from prvaptmirror.config import Config
-from prvaptmirror.debparse import ParsedDeb
-from prvaptmirror.db import get_package_nva
+from prvaptmirror.debparse import ParsedDeb, hash_file
+from prvaptmirror.db import get_package_nva, set_setting, transaction
+from prvaptmirror.events import emit
+from prvaptmirror.filesystem import fsync_directory
 
 
 class DuplicatePackage(Exception):
@@ -144,70 +145,92 @@ def exclusive_link_or_revive(
 ) -> PlaceResult:
     """Must be called while holding publish.lock. incoming and dest share a filesystem."""
     dest = pool_dest(cfg, parsed)
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    os.chmod(dest.parent, 0o755)
+    created = False
+    inode = None
     try:
-        os.link(str(incoming_path), str(dest))
-    except FileExistsError as exc:
-        incoming_path.unlink(missing_ok=True)
-        raise DuplicatePackage(parsed.name, parsed.version, parsed.architecture) from exc
-    os.chmod(dest, 0o644)
-    st = dest.stat()
-    filename = dest.relative_to(cfg.repo_dir).as_posix()
-    control_json = parsed.control_json()
-    try:
-        cur = conn.execute(
-            """
-            INSERT INTO packages (
-              name, version, architecture, component, filename, size,
-              md5, sha1, sha256, control_json, state, uploaded_at, uploaded_by
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
-            """,
-            (
-                parsed.name,
-                parsed.version,
-                parsed.architecture,
-                cfg.component,
-                filename,
-                parsed.size,
-                parsed.md5,
-                parsed.sha1,
-                parsed.sha256,
-                control_json,
-                uploaded_at,
-                user_id,
-            ),
-        )
-        return PlaceResult(row_id=int(cur.lastrowid), revived=False, filename=filename)
-    except sqlite3.IntegrityError as exc:
-        # sqlite3.IntegrityError — revive ghost/missing row; never unlink the new inode
         existing = get_package_nva(conn, parsed.name, parsed.version, parsed.architecture)
-        if existing is None:
-            try:
-                if dest.exists() and dest.stat().st_ino == st.st_ino:
-                    dest.unlink()
-            except OSError:
-                pass
-            raise DuplicatePackage(parsed.name, parsed.version, parsed.architecture) from exc
-        conn.execute(
-            """
-            UPDATE packages SET
-              filename = ?, size = ?, md5 = ?, sha1 = ?, sha256 = ?,
-              control_json = ?, state = 'active', uploaded_at = ?, uploaded_by = ?
-            WHERE id = ?
-            """,
-            (
-                filename,
-                parsed.size,
-                parsed.md5,
-                parsed.sha1,
-                parsed.sha256,
-                control_json,
-                uploaded_at,
-                user_id,
-                existing.id,
-            ),
-        )
-        return PlaceResult(row_id=existing.id, revived=True, filename=filename)
+        if existing is not None and (
+            existing.sha256 != parsed.sha256 or existing.state == "pending_delete"
+        ):
+            raise DuplicatePackage(parsed.name, parsed.version, parsed.architecture)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        os.chmod(dest.parent, 0o755)
+        try:
+            os.link(incoming_path, dest)
+            created = True
+        except FileExistsError as exc:
+            # A crash may leave a durable blob without its database row. Only
+            # adopt it when its bytes match this independently validated upload.
+            if (existing is not None and existing.state == "active") or dest.is_symlink():
+                raise DuplicatePackage(parsed.name, parsed.version, parsed.architecture) from exc
+            if hash_file(dest)[3] != parsed.sha256:
+                raise DuplicatePackage(parsed.name, parsed.version, parsed.architecture) from exc
+        inode = dest.stat().st_ino
+        os.chmod(dest, 0o644)
+        with dest.open("rb") as blob:
+            os.fsync(blob.fileno())
+        directory = dest.parent
+        while True:
+            fsync_directory(directory)
+            if directory == cfg.repo_dir:
+                break
+            directory = directory.parent
+        filename = dest.relative_to(cfg.repo_dir).as_posix()
+        # The dirty flag and row commit together, including when the process
+        # dies immediately after this transaction and before upload_commit.
+        with transaction(conn):
+            if existing is None:
+                cur = conn.execute(
+                    """
+                    INSERT INTO packages (
+                      name, version, architecture, component, filename, size,
+                      md5, sha1, sha256, control_json, state, uploaded_at, uploaded_by
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
+                    """,
+                    (parsed.name, parsed.version, parsed.architecture, cfg.component,
+                     filename, parsed.size, parsed.md5, parsed.sha1, parsed.sha256,
+                     parsed.control_json(), uploaded_at, user_id),
+                )
+                row_id = int(cur.lastrowid)
+            else:
+                conn.execute(
+                    """UPDATE packages SET filename=?, size=?, md5=?, sha1=?, sha256=?,
+                       control_json=?, state='active', uploaded_at=?, uploaded_by=?
+                       WHERE id=?""",
+                    (filename, parsed.size, parsed.md5, parsed.sha1, parsed.sha256,
+                     parsed.control_json(), uploaded_at, user_id, existing.id),
+                )
+                row_id = existing.id
+            set_setting(conn, "publish_dirty", "1")
+        return PlaceResult(row_id=row_id, revived=existing is not None, filename=filename)
+    except Exception:
+        # Remove only the inode this call created. Already committed packages
+        # and pre-existing crash leftovers must never be destroyed by a retry.
+        if created and dest.exists() and (inode is None or dest.stat().st_ino == inode):
+            dest.unlink()
+            fsync_directory(dest.parent)
+        raise
     finally:
         incoming_path.unlink(missing_ok=True)
+
+
+def quarantine_orphaned_blobs(cfg: Config, conn) -> int:
+    """Under publish.lock, move crash leftovers out of the public repository."""
+    known = {row[0] for row in conn.execute("SELECT filename FROM packages")}
+    count = 0
+    for blob in cfg.pool_dir.rglob("*.deb"):
+        if blob.relative_to(cfg.repo_dir).as_posix() in known:
+            continue
+        quarantine = cfg.data_dir / "quarantine"
+        quarantine.mkdir(mode=0o700, exist_ok=True)
+        os.chmod(quarantine, 0o700)
+        # Persist the recovery obligation before changing the filesystem.
+        set_setting(conn, "publish_dirty", "1")
+        target = quarantine / (uuid.uuid4().hex + ".deb")
+        os.rename(blob, target)
+        fsync_directory(quarantine)
+        fsync_directory(cfg.data_dir)
+        fsync_directory(blob.parent)
+        count += 1
+        emit("package_orphan_quarantined", filename=blob.relative_to(cfg.repo_dir).as_posix())
+    return count

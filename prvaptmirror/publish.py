@@ -2,10 +2,6 @@
 
 from __future__ import annotations
 
-import ctypes
-import ctypes.util
-import errno
-import fcntl
 import os
 import shutil
 import stat
@@ -25,6 +21,7 @@ from prvaptmirror.db import (
 )
 from prvaptmirror.debparse import ParsedDeb
 from prvaptmirror.events import emit
+from prvaptmirror.filesystem import file_lock, rename_exchange
 from prvaptmirror.indexer import rebuild_dists
 from prvaptmirror.models import PackageRow, PublishResult
 from prvaptmirror.signing import SigningError, sign_release
@@ -32,57 +29,18 @@ from prvaptmirror.storage import (
     DuplicatePackage,
     exclusive_link_or_revive,
     prune_empty_parents,
+    quarantine_orphaned_blobs,
 )
-
-AT_FDCWD = -100
-RENAME_EXCHANGE = 2
-
-_libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
-_libc.renameat2.restype = ctypes.c_int
-_libc.renameat2.argtypes = [
-    ctypes.c_int,
-    ctypes.c_char_p,
-    ctypes.c_int,
-    ctypes.c_char_p,
-    ctypes.c_uint,
-]
-
 
 class PublishError(RuntimeError):
     pass
 
 
-def rename_exchange(a: str, b: str) -> None:
-    rc = _libc.renameat2(
-        AT_FDCWD,
-        a.encode("utf-8"),
-        AT_FDCWD,
-        b.encode("utf-8"),
-        RENAME_EXCHANGE,
-    )
-    if rc != 0:
-        err = ctypes.get_errno()
-        if err == errno.ENOSYS:
-            raise OSError(
-                err,
-                "renameat2(RENAME_EXCHANGE) unsupported; refusing two-step mv",
-                a,
-                None,
-                b,
-            )
-        raise OSError(err, os.strerror(err), a, None, b)
-
-
 @contextmanager
 def publish_lock(cfg: Config):
     """Synchronous code only. Never enter from async def / the event-loop thread."""
-    fd = os.open(str(cfg.lock_path), os.O_RDWR | os.O_CREAT, 0o600)
-    try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
+    with file_lock(cfg.lock_path):
         yield
-    finally:
-        fcntl.flock(fd, fcntl.LOCK_UN)
-        os.close(fd)
 
 
 def _now_iso() -> str:
@@ -309,6 +267,7 @@ def _finish_orphaned_pending_deletes(cfg: Config, conn) -> None:
 
 def startup_reconcile(cfg: Config, conn) -> None:
     with publish_lock(cfg):
+        quarantine_orphaned_blobs(cfg, conn)
         live = cfg.dists_dir
         nxt = cfg.repo_dir / "dists.next"
         last = last_publish_status(conn)

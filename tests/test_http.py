@@ -59,6 +59,90 @@ def test_unauthenticated_mutating_fails(client):
         assert "/admin/login" in resp.headers.get("location", "")
 
 
+def test_unauthenticated_upload_does_not_parse_body(client, monkeypatch):
+    from starlette.requests import Request
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("anonymous upload body must not be parsed")
+
+    monkeypatch.setattr(Request, "form", forbidden)
+    response = client.post("/admin/packages/upload", content=b"x" * (2 * 1024 * 1024),
+                           headers={"Content-Type": "multipart/form-data; boundary=test"},
+                           follow_redirects=False)
+    assert response.status_code == 303
+    assert response.headers["location"] == "/admin/login"
+
+
+def test_startup_key_initialization_excludes_backups(ready, monkeypatch):
+    from fastapi.testclient import TestClient
+    from prvaptmirror import main
+    from prvaptmirror.filesystem import file_lock
+    import pytest
+
+    original = main.ensure_key
+    checked = []
+
+    def initialize(cfg, conn):
+        with pytest.raises(BlockingIOError):
+            with file_lock(cfg.lock_path, blocking=False):
+                pass
+        checked.append(True)
+        return original(cfg, conn)
+
+    monkeypatch.setattr(main, "ensure_key", initialize)
+    with TestClient(main.create_app(ready), base_url=ORIGIN) as instance:
+        assert instance.get("/readyz").status_code == 200
+    assert checked == [True]
+
+
+def test_upload_content_length_rejected_before_parser(client, ready, monkeypatch):
+    from prvaptmirror.db import connect, set_setting
+    from starlette.requests import Request
+
+    login(client)
+    conn = connect(ready)
+    set_setting(conn, "app.max_upload_mb", "1")
+    conn.close()
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("oversized Content-Length must be checked before parsing")
+
+    monkeypatch.setattr(Request, "form", forbidden)
+    response = client.post("/admin/packages/upload", content=b"x" * (2 * 1024 * 1024),
+                           headers={"Content-Type": "multipart/form-data; boundary=test"})
+    assert response.status_code == 413
+    assert not list(ready.incoming_dir.iterdir())
+
+
+def test_upload_cleans_up_earlier_file_when_later_file_rejected(client, ready, tmp_path):
+    login(client)
+    token = _csrf(client.get("/admin/packages").text)
+    deb = build_deb(tmp_path / "first.deb")
+    response = client.post("/admin/packages/upload", data={"csrf_token": token}, files=[
+        ("files", ("first.deb", deb.read_bytes(), "application/octet-stream")),
+        ("files", ("second.txt", b"not a package", "application/octet-stream")),
+    ], follow_redirects=False)
+    assert response.status_code == 303
+    assert "notdeb" in response.headers["location"]
+    assert not list(ready.incoming_dir.iterdir())
+
+
+def test_upload_file_count_limit_keeps_admin_error_page(client, ready):
+    from prvaptmirror.db import connect, set_setting
+    login(client)
+    conn = connect(ready)
+    set_setting(conn, "app.max_upload_files", "1")
+    conn.close()
+    token = _csrf(client.get("/admin/packages").text)
+    response = client.post("/admin/packages/upload", data={"csrf_token": token}, files=[
+        ("files", ("one.deb", b"one", "application/octet-stream")),
+        ("files", ("two.deb", b"two", "application/octet-stream")),
+    ], follow_redirects=False)
+    assert response.status_code == 303
+    assert "too_many" in response.headers["location"]
+    assert not list(ready.incoming_dir.iterdir())
+
+
 def test_health_ready_login_upload_inrelease(client, tmp_path: Path):
     health = client.get("/healthz")
     assert health.status_code == 200
