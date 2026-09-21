@@ -20,7 +20,7 @@ from prvaptmirror.db import connect, get_package_nva, transaction
 from prvaptmirror.debparse import DebParseError, ParsedDeb, parse_deb
 from prvaptmirror.events import emit
 from prvaptmirror.models import SourceRow
-from prvaptmirror.publish import upload_commit
+from prvaptmirror.publish import retry_pending_publish, upload_commit
 from prvaptmirror.settings import load_app_config
 from prvaptmirror.sources import (
     decrypt_token,
@@ -858,8 +858,11 @@ def _execute_source(
     conn: sqlite3.Connection,
     client: httpx.Client,
 ) -> tuple[SyncStats, str | None]:
-    cfg = load_app_config(base_cfg, conn)
     stats = SyncStats()
+    recovery = retry_pending_publish(base_cfg, conn)
+    if recovery is not None and not recovery.ok:
+        return stats, f"仓库索引重试发布失败：{recovery.error}"
+    cfg = load_app_config(base_cfg, conn)
     if source.kind == "github_release":
         assets = _github_assets(client, source)
         errors = _process_assets(client, cfg, source, conn, assets, stats)
@@ -891,24 +894,24 @@ def sync_source_once(
         if claimed is None:
             return False
         source, run_id = claimed
-        token = decrypt_token(base_cfg, source.token_encrypted)
-        headers = {
-            "Accept": "application/vnd.github+json",
-            "User-Agent": USER_AGENT,
-            "X-GitHub-Api-Version": "2022-11-28",
-        }
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
-        if client is None:
-            client = httpx.Client(
-                headers=headers,
-                follow_redirects=True,
-                timeout=httpx.Timeout(120.0, connect=20.0),
-            )
-        else:
-            client.headers.update(headers)
         error: str | None = None
         try:
+            token = decrypt_token(base_cfg, source.token_encrypted)
+            headers = {
+                "Accept": "application/vnd.github+json",
+                "User-Agent": USER_AGENT,
+                "X-GitHub-Api-Version": "2022-11-28",
+            }
+            if token:
+                headers["Authorization"] = f"Bearer {token}"
+            if client is None:
+                client = httpx.Client(
+                    headers=headers,
+                    follow_redirects=True,
+                    timeout=httpx.Timeout(120.0, connect=20.0),
+                )
+            else:
+                client.headers.update(headers)
             stats, error = _execute_source(base_cfg, source, conn, client)
         except Exception as exc:
             error = _safe_error(exc)
@@ -925,15 +928,23 @@ def sync_source_once(
         )
         return True
     finally:
-        if owned_client and client is not None:
-            client.close()
-        conn.close()
+        try:
+            if owned_client and client is not None:
+                client.close()
+        finally:
+            conn.close()
 
 
 def run_due_sources(base_cfg: Config, *, max_sources: int = 10) -> int:
     count = 0
     while count < max_sources and sync_source_once(base_cfg):
         count += 1
+    if count == 0:
+        conn = connect(base_cfg)
+        try:
+            retry_pending_publish(base_cfg, conn)
+        finally:
+            conn.close()
     return count
 
 

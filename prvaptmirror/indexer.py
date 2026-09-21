@@ -111,7 +111,7 @@ def render_arch_release(cfg: Config, arch: str) -> bytes:
         f"Archive: {cfg.suite}\n"
         f"Origin: {cfg.origin}\n"
         f"Label: {cfg.label}\n"
-        f"Acquire-By-Hash: no\n"
+        f"Acquire-By-Hash: yes\n"
         f"Component: {cfg.component}\n"
         f"Architecture: {arch}\n"
     )
@@ -157,7 +157,7 @@ def render_release(cfg: Config, staging_suite: Path, *, now: datetime | None = N
         f"Architectures: {archs}\n"
         f"Components: {cfg.component}\n"
         f"Description: Personal apt repository\n"
-        f"Acquire-By-Hash: no\n"
+        f"Acquire-By-Hash: yes\n"
         f"MD5Sum:\n"
         + "\n".join(md5_lines)
         + "\nSHA1:\n"

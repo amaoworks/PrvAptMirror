@@ -16,7 +16,11 @@
   </form>
   {% if request.query_params.get("ok") %}<p class="ok flash">上传已提交。</p>{% endif %}
   {% if request.query_params.get("deleted") %}<p class="ok flash">已删除并重建索引。</p>{% endif %}
-  {% if request.query_params.get("err") %}<p class="err flash">{{ request.query_params.get("err") }}</p>{% endif %}
+  {% if request.query_params.get("err") == "upload_publish" %}
+    <p class="err flash">软件包已保存，但仓库索引发布失败，APT 暂时无法获取本次更新。系统会自动重试，也可前往<a href="/admin/">仪表盘</a>重建索引。</p>
+  {% elif request.query_params.get("err") == "publish" %}
+    <p class="err flash">仓库索引发布失败，系统会自动重试，也可前往<a href="/admin/">仪表盘</a>重建索引。</p>
+  {% elif request.query_params.get("err") %}<p class="err flash">{{ request.query_params.get("err") }}</p>{% endif %}
 </div>
 
 <div class="card">
@@ -69,4 +73,3 @@
   </div>
 </div>
 {% endblock %}
-

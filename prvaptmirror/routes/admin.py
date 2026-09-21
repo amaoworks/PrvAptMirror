@@ -1015,6 +1015,8 @@ async def upload_packages(request: Request):
                 conn.close()
 
         results, pub = await run_in_threadpool(work)
+        if pub is not None and not pub.ok:
+            return RedirectResponse("/admin/packages?err=upload_publish", status_code=303)
         if any(not r["ok"] and r.get("error") == "duplicate" for r in results) and not any(
             r["ok"] for r in results
         ):
@@ -1065,6 +1067,8 @@ async def delete_package(
     user = current_user(request)
     if user is None:
         return RedirectResponse("/admin/login", status_code=303)
+    if user.must_change_password:
+        return RedirectResponse("/admin/password", status_code=303)
     cfg = _cfg(request)
     expected = _csrf_expected(request, user)
     if not verify_csrf(request, cfg, csrf_token, expected):
@@ -1172,6 +1176,8 @@ async def publish_now(
     user = current_user(request)
     if user is None:
         return RedirectResponse("/admin/login", status_code=303)
+    if user.must_change_password:
+        return RedirectResponse("/admin/password", status_code=303)
     cfg = _cfg(request)
     expected = _csrf_expected(request, user)
     if not verify_csrf(request, cfg, csrf_token, expected):
@@ -1185,5 +1191,5 @@ async def publish_now(
             conn.close()
 
     loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, work)
-    return RedirectResponse("/admin/", status_code=303)
+    result = await loop.run_in_executor(None, work)
+    return RedirectResponse("/admin/?ok=1" if result.ok else "/admin/?err=publish", status_code=303)

@@ -46,6 +46,90 @@ def test_login_without_origin_when_check_off(client):
     assert client.cookies.get("prvapt_session")
 
 
+def test_publish_failure_is_visible_and_manual_retry_recovers(client, ready, tmp_path, monkeypatch):
+    from prvaptmirror import publish as publishing
+    from prvaptmirror.db import connect, list_packages
+
+    login(client)
+    token = _csrf(client.get("/admin/packages").text)
+    original_sign = publishing.sign_release
+
+    def fail_sign(*args):
+        raise OSError("test signing unavailable")
+
+    monkeypatch.setattr(publishing, "sign_release", fail_sign)
+    deb = build_deb(tmp_path / "retry.deb", package="retry-publish")
+    response = client.post(
+        "/admin/packages/upload", data={"csrf_token": token},
+        files={"files": (deb.name, deb.read_bytes())}, follow_redirects=False,
+    )
+    assert response.headers["location"] == "/admin/packages?err=upload_publish"
+    assert "软件包已保存，但仓库索引发布失败" in client.get(response.headers["location"]).text
+    conn = connect(ready)
+    assert len(list_packages(conn)) == 1
+    conn.close()
+    assert client.get("/healthz").status_code == 200
+    assert client.get("/readyz").status_code == 503
+    assert "test signing unavailable" in client.get("/admin/").text
+    response = client.post("/admin/publish", data={"csrf_token": token}, follow_redirects=False)
+    assert response.headers["location"] == "/admin/?err=publish"
+    monkeypatch.setattr(publishing, "sign_release", original_sign)
+    response = client.post("/admin/publish", data={"csrf_token": token}, follow_redirects=False)
+    assert response.headers["location"] == "/admin/?ok=1"
+    assert client.get("/readyz").status_code == 200
+    assert "Package: retry-publish" in client.get("/apt/dists/stable/main/binary-amd64/Packages").text
+
+
+def test_initial_password_blocks_delete_and_publish(client, ready, tmp_path):
+    from prvaptmirror.db import connect, get_package
+
+    login(client)
+    token = _csrf(client.get("/admin/packages").text)
+    deb = build_deb(tmp_path / "protected.deb", package="protected")
+    client.post("/admin/packages/upload", data={"csrf_token": token},
+                files={"files": (deb.name, deb.read_bytes())})
+    conn = connect(ready)
+    package_id = conn.execute("SELECT id FROM packages").fetchone()[0]
+    before = conn.execute("SELECT count(*) FROM publish_runs").fetchone()[0]
+    conn.execute("UPDATE users SET must_change_password=1")
+    for url in (f"/admin/packages/{package_id}/delete", "/admin/publish"):
+        response = client.post(url, data={"csrf_token": token, "confirm_name": "protected"},
+                               follow_redirects=False)
+        assert response.status_code == 303
+        assert response.headers["location"] == "/admin/password"
+    assert conn.execute("SELECT count(*) FROM publish_runs").fetchone()[0] == before
+    package = get_package(conn, package_id)
+    assert package.state == "active"
+    assert (ready.repo_dir / package.filename).is_file()
+    conn.close()
+
+
+def test_old_release_hashes_remain_fetchable_across_multiple_publishes(client, tmp_path):
+    import hashlib
+
+    login(client)
+    token = _csrf(client.get("/admin/packages").text)
+    old_indexes = {}
+    for number in range(4):
+        deb = build_deb(tmp_path / f"gen-{number}.deb", package=f"generation-{number}")
+        response = client.post("/admin/packages/upload", data={"csrf_token": token},
+                               files={"files": (deb.name, deb.read_bytes())}, follow_redirects=False)
+        assert response.headers["location"] == "/admin/packages?ok=1"
+        if number == 0:
+            inrelease = client.get("/apt/dists/stable/InRelease").text
+            assert "Acquire-By-Hash: yes" in inrelease
+            for name in ("Packages", "Packages.gz", "Release"):
+                body = client.get(f"/apt/dists/stable/main/binary-amd64/{name}").content
+                digest = hashlib.sha256(body).hexdigest()
+                assert re.search(rf"{digest}\s+{len(body)} main/binary-amd64/{re.escape(name)}", inrelease)
+                old_indexes[digest] = body
+    for digest, body in old_indexes.items():
+        response = client.get(f"/apt/dists/stable/main/binary-amd64/by-hash/SHA256/{digest}")
+        assert response.status_code == 200
+        assert response.content == body
+    assert b"generation-3" in client.get("/apt/dists/stable/main/binary-amd64/Packages").content
+
+
 def test_unauthenticated_mutating_fails(client):
     resp = client.post(
         "/admin/packages/upload",

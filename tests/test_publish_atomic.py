@@ -67,6 +67,40 @@ def test_second_publish_exchanges_inode(ready, tmp_path: Path):
     _ = first_ino
 
 
+def test_repeated_publish_failures_clean_staging_and_preserve_live(ready, tmp_path, monkeypatch):
+    _upload(ready, tmp_path, package="keep", version="1", architecture="all")
+    before = (ready.dists_dir / ready.suite / "InRelease").read_bytes()
+
+    def fail_sign(*args):
+        raise OSError("signer unavailable")
+
+    monkeypatch.setattr("prvaptmirror.publish.sign_release", fail_sign)
+    conn = connect(ready)
+    try:
+        for _ in range(3):
+            assert not publish_unlocked(ready, conn).ok
+            assert not list(ready.staging_dir.iterdir())
+            assert (ready.dists_dir / ready.suite / "InRelease").read_bytes() == before
+    finally:
+        conn.close()
+
+
+def test_upgrade_rebuilds_clean_repository_without_by_hash(ready, tmp_path):
+    from prvaptmirror.byhash import HISTORY_FILE
+    from prvaptmirror.db import last_publish_row
+
+    _upload(ready, tmp_path, package="upgrade", version="1", architecture="all")
+    (ready.dists_dir / HISTORY_FILE).unlink()
+    conn = connect(ready)
+    try:
+        before = last_publish_row(conn)["id"]
+        startup_reconcile(ready, conn)
+        assert last_publish_row(conn)["id"] > before
+        assert (ready.dists_dir / HISTORY_FILE).is_file()
+    finally:
+        conn.close()
+
+
 def test_delete_publishes_then_unlinks(ready, tmp_path: Path):
     results, _, parsed = _upload(
         ready, tmp_path, package="bye", version="1.0-1", architecture="amd64"

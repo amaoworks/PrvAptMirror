@@ -29,4 +29,4 @@ def test_inrelease_verifies_against_repo_key(ready, tmp_path: Path):
     assert proc.returncode == 0, proc.stderr.decode()
     release = (staging / "Release").read_bytes()
     # clearsign wraps the original bytes
-    assert b"Acquire-By-Hash: no" in release
+    assert b"Acquire-By-Hash: yes" in release

@@ -9,6 +9,12 @@
   </form>
 </div>
 
+{% if request.query_params.get("err") == "publish" %}
+  <p class="err flash">索引发布失败。系统会自动重试，请检查下方的错误信息。</p>
+{% elif request.query_params.get("ok") %}
+  <p class="ok flash">索引已重建并发布。</p>
+{% endif %}
+
 <div class="stat-grid">
   <div class="stat-card">
     <div class="stat-label">软件包总数</div>
@@ -56,6 +62,7 @@
           {% if last %}
             {{ last["status"] | status_label }} · {{ last["finished_at"] or last["started_at"] }}
             {% if last["duration_ms"] is not none %}（{{ last["duration_ms"] }} ms）{% endif %}
+            {% if last["error"] %}<p class="err">{{ last["error"] }}</p>{% endif %}
           {% else %}
             <span class="muted">（尚无记录）</span>
           {% endif %}
@@ -95,4 +102,3 @@
   </div>
 </div>
 {% endblock %}
-

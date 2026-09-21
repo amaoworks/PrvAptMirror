@@ -37,7 +37,7 @@ docker compose pull
 docker compose up -d
 ```
 
-`.env.example` 默认固定到 `0.1.1` 镜像，升级时请明确修改 `PRVAPT_IMAGE`。如需从本地源码构建：
+`.env.example` 默认使用 `ghcr.io/amaoworks/prvaptmirror:latest`。升级时执行 `docker compose pull` 和 `docker compose up -d`，无需修改镜像版本号。如需从本地源码构建：
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
@@ -48,6 +48,8 @@ docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 - 未显式指定首次密码时，生成的初始密码会写入 `data/admin-bootstrap.txt`（权限 0600），首次登录后必须修改。
 
 已有数据迁移前先停服务，并递归修正整个数据目录的属主；应用启动会检查索引目录是否可写。容器运行用户固定为 `1000:1000`。
+
+Compose 使用 `restart: unless-stopped`，进程退出或 Docker 重启后会恢复运行（手动停止的容器除外）。健康检查使用 `/readyz`：索引缺失、有待发布改动或最近发布未成功时返回 503；`/healthz` 仅检查进程与数据库可访问。容器标记为 unhealthy 本身不会触发 Docker 重启，需通过监控关注持续失败。
 
 如需 HTTPS，可在宿主机用 Caddy / Traefik / nginx 反代到该端口。
 
@@ -72,6 +74,8 @@ docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 
 GitHub Token 为可选项，可用于私有仓库或提高 API 限额。Token 在写入数据库前会加密，之后不会在页面回显。加密密钥由 `data/secret-key` 派生，因此迁移或恢复时必须让它与 `data.sqlite` 一起保留。
 
+软件包已入库但索引发布失败时，页面会明确提示。调度器在后续同步前或空闲轮询时重试发布（默认每 30 秒轮询），无需重复上传或重新下载；没有配置来源时也会重试。凭据解密等初始化异常会记录为失败，可修正配置后再次同步。
+
 现有目录映射会让全部内容在升级镜像或重建容器后继续存在：
 
 ```text
@@ -88,7 +92,7 @@ docker compose exec app prvaptmirror-admin reset-password --username admin
 
 ## 容器版本发布
 
-推送到 `main` 会发布 `edge` 和 `sha-*` 镜像；推送 `v0.1.1` 这样的语义化 Git Tag，会发布正式版本标签（`0.1.1`、`0.1`、`0`）并更新 `latest`。已经发布的完整版本标签不得覆盖；生产环境应固定完整版本号，不建议直接使用 `latest`。
+推送到 `main` 会发布 `edge` 和 `sha-*` 镜像；推送语义化 Git Tag 会发布带版本号的镜像，并更新 `latest`。测试和镜像发布成功后，工作流会自动创建 GitHub Release，优先使用 `.github/release-notes/<tag>.md`，没有对应文件时自动生成说明。部署默认使用 `latest`，版本标签保留用于选择特定版本或回滚。已经发布的完整版本标签不得覆盖。
 
 ## 不使用 Docker
 
@@ -105,13 +109,15 @@ export PRVAPT_DATA_DIR=$PWD/data
 
 在后台的 **客户端接入** 页面复制命令即可。脚本会把 ASCII 公钥安装到 `/etc/apt/keyrings`，并写入带 `Signed-By` 的 deb822 源。不要使用 `apt-key` 或 `trusted=yes`。
 
+索引启用 SHA256 By-Hash，发布时保留旧哈希索引 7 天，并为每个当前索引至少保留两个历史版本，避免客户端跨发布请求时遇到摘要不匹配。旧版本升级后会在启动时重建索引。此保留策略只覆盖索引；主动删除软件包后，旧索引引用的包文件仍可能返回 404。
+
 ## 测试
 
 ```bash
 .venv/bin/pytest -q
 ```
 
-可选的官方 apt 客户端联调：`tests/integration/test_apt_client.sh`（需要 Docker，且服务已启动）。
+可选的官方 apt 客户端联调：`tests/integration/test_apt_client.sh`（需要 Docker，且服务已就绪）。测试强制使用 By-Hash，索引下载失败时返回非零状态。修改过 Suite/Component 时，设置 `APT_TEST_SUITE` / `APT_TEST_COMPONENT`。
 
 ## 备份与恢复
 

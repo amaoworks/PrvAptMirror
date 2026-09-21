@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
+from prvaptmirror.byhash import HISTORY_FILE, prepare_by_hash
 from prvaptmirror.config import Config
 from prvaptmirror.db import (
     get_package,
@@ -24,6 +25,7 @@ from prvaptmirror.events import emit
 from prvaptmirror.filesystem import file_lock, rename_exchange
 from prvaptmirror.indexer import rebuild_dists
 from prvaptmirror.models import PackageRow, PublishResult
+from prvaptmirror.settings import SETTINGS_PENDING_KEY, load_app_config
 from prvaptmirror.signing import SigningError, sign_release
 from prvaptmirror.storage import (
     DuplicatePackage,
@@ -89,6 +91,7 @@ def publish_unlocked(cfg: Config, conn, *, now: datetime | None = None) -> Publi
         (started_at,),
     )
     run_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    staging_root: Path | None = None
     try:
         fingerprint = get_setting(conn, "gpg_fingerprint")
         if not fingerprint:
@@ -105,6 +108,7 @@ def publish_unlocked(cfg: Config, conn, *, now: datetime | None = None) -> Publi
         staging_suite = staging_root / "dists" / cfg.suite
         staging_suite.mkdir(parents=True, exist_ok=True)
         skipped = rebuild_dists(present, staging_suite, cfg, now=now)
+        prepare_by_hash(staging_root / "dists", cfg.dists_dir)
         sign_release(cfg, staging_suite, fingerprint)
         _fsync_tree_files(staging_root / "dists")
         dists_next = cfg.repo_dir / "dists.next"
@@ -124,7 +128,6 @@ def publish_unlocked(cfg: Config, conn, *, now: datetime | None = None) -> Publi
             leftover = cfg.repo_dir / "dists.next"
             if leftover.exists():
                 shutil.rmtree(leftover)
-        shutil.rmtree(staging_root, ignore_errors=True)
         duration_ms = int((time.monotonic() - started) * 1000)
         conn.execute(
             """
@@ -159,11 +162,31 @@ def publish_unlocked(cfg: Config, conn, *, now: datetime | None = None) -> Publi
         if isinstance(exc, (PublishError, SigningError, OSError)):
             return PublishResult(ok=False, error=str(exc), duration_ms=duration_ms)
         return PublishResult(ok=False, error=str(exc), duration_ms=duration_ms)
+    finally:
+        if staging_root is not None:
+            shutil.rmtree(staging_root, ignore_errors=True)
 
 
 def publish(cfg: Config, conn, *, now: datetime | None = None) -> PublishResult:
     with publish_lock(cfg):
-        return publish_unlocked(cfg, conn, now=now)
+        result = publish_unlocked(cfg, conn, now=now)
+        if result.ok:
+            _finish_orphaned_pending_deletes(cfg, conn)
+        return result
+
+
+def retry_pending_publish(base_cfg: Config, conn) -> PublishResult | None:
+    """Recover repository changes even when no source has new assets to import."""
+    with publish_lock(base_cfg):
+        pending_settings = get_setting(conn, SETTINGS_PENDING_KEY, "0") == "1"
+        if get_setting(conn, "publish_dirty", "0") != "1" and not pending_settings:
+            return None
+        cfg = load_app_config(base_cfg, conn)
+        result = publish_unlocked(cfg, conn)
+        if result.ok:
+            set_setting(conn, SETTINGS_PENDING_KEY, "0")
+            _finish_orphaned_pending_deletes(cfg, conn)
+        return result
 
 
 def upload_commit(
@@ -281,5 +304,5 @@ def startup_reconcile(cfg: Config, conn) -> None:
         _quarantine_missing(cfg, conn)
         _finish_orphaned_pending_deletes(cfg, conn)
         dirty = get_setting(conn, "publish_dirty", "0") == "1"
-        if (not live.exists()) or dirty or last != "success":
+        if not (live / HISTORY_FILE).is_file() or dirty or last != "success":
             publish_unlocked(cfg, conn)

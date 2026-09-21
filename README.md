@@ -37,7 +37,7 @@ docker compose pull
 docker compose up -d
 ```
 
-`.env.example` pins the `0.1.1` image. Change `PRVAPT_IMAGE` explicitly when upgrading. To build locally instead:
+`.env.example` uses `ghcr.io/amaoworks/prvaptmirror:latest`. To upgrade, run `docker compose pull` followed by `docker compose up -d`; no image version edit is needed. To build locally instead:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
@@ -48,6 +48,8 @@ docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 - When no initial password is specified, the generated password is written to `data/admin-bootstrap.txt` (mode 0600) and must be changed on first login.
 
 Stop an existing instance before migrating data and recursively fix ownership of the entire data directory. Startup checks that index directories are writable. The container runs as `1000:1000`.
+
+Compose uses `restart: unless-stopped` to recover after a process exit or Docker restart, except for manually stopped containers. Its health check uses `/readyz`, which returns 503 when indexes are missing, changes are unpublished, or the latest publish did not succeed. `/healthz` only checks process/database access. Docker does not restart a container merely because it is unhealthy; monitor persistent failures.
 
 Put Caddy / Traefik / host nginx in front of that port if you need HTTPS.
 
@@ -72,6 +74,8 @@ When adding or editing a GitHub or HTTP-directory source, **Test fetch and regex
 
 An optional GitHub token can be entered on the source page for private repositories or higher API limits. It is encrypted before being stored and is never displayed again. The encryption key is derived from `data/secret-key`, so that file must remain with `data.sqlite` when moving or restoring an installation.
 
+If packages are saved but publishing fails, the UI reports it explicitly. The scheduler retries before subsequent synchronizations or during idle polling (every 30 seconds by default), even without configured sources. Re-uploading or re-downloading packages is unnecessary. Initialization failures, including token decryption errors, finish the run as failed so it can be queued again after correcting the configuration.
+
 The existing bind mount persists everything across image upgrades and container recreation:
 
 ```text
@@ -88,7 +92,7 @@ docker compose exec app prvaptmirror-admin reset-password --username admin
 
 ## Container releases
 
-Pushing to `main` publishes `edge` and `sha-*` images. Pushing a semantic Git tag such as `v0.1.1` publishes release tags (`0.1.1`, `0.1`, `0`) and updates `latest`. Released full-version tags must not be overwritten. Production deployments should pin the full version instead of using `latest`.
+Pushing to `main` publishes `edge` and `sha-*` images. Pushing a semantic Git tag publishes versioned images and updates `latest`. After tests and image publishing succeed, the workflow creates a GitHub Release using `.github/release-notes/<tag>.md` when available, or generated notes otherwise. Deployments use `latest` by default; versioned tags remain available for selecting a specific release or rolling back. Released full-version tags must not be overwritten.
 
 ## Without Docker
 
@@ -103,6 +107,8 @@ The app serves both `/admin/` and `/apt/`.
 
 ## Client setup
 
+Indexes support SHA256 By-Hash. Publishing retains hash-addressed indexes for seven days and at least two previous versions of each current index, so clients can finish requests across a publish. Upgrading an older installation rebuilds indexes at startup. This retention covers indexes only: explicitly deleting a package can still make downloads referenced by an old index return 404.
+
 Copy the snippet from the admin **Client setup** page. It installs the ASCII-armored key under `/etc/apt/keyrings` and a deb822 source with `Signed-By`. Do not use `apt-key` or `trusted=yes`.
 
 ## Tests
@@ -111,7 +117,7 @@ Copy the snippet from the admin **Client setup** page. It installs the ASCII-arm
 .venv/bin/pytest -q
 ```
 
-Optional official-apt client: `tests/integration/test_apt_client.sh` (needs Docker and a running instance).
+Optional official-apt client: `tests/integration/test_apt_client.sh` (needs Docker and a ready instance). It forces By-Hash and fails on index download errors. Set `APT_TEST_SUITE` / `APT_TEST_COMPONENT` if you changed those repository settings.
 
 ## Backup and restore
 

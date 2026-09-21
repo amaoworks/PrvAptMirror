@@ -83,6 +83,110 @@ def test_source_validation_rejects_bad_values(cfg):
     conn.close()
 
 
+@pytest.mark.parametrize("kind", ["github_release", "direct_url", "directory"])
+def test_sync_retries_failed_publish_without_reimport(ready, tmp_path, monkeypatch, kind):
+    from prvaptmirror import publish as publishing
+    from prvaptmirror.db import get_setting
+
+    deb = build_deb(tmp_path / "tool_1_all.deb", package="retry-tool").read_bytes()
+    downloads = 0
+
+    def handler(request):
+        nonlocal downloads
+        if request.url.path == "/repos/acme/tool/releases":
+            return httpx.Response(200, json=[{"assets": [{
+                "id": 1, "name": "tool_1_all.deb", "size": len(deb),
+                "url": "https://api.github.com/repos/acme/tool/releases/assets/1",
+                "updated_at": "2026-09-20T00:00:00Z",
+            }]}])
+        if request.url.path == "/pool/":
+            return httpx.Response(200, text='<a href="tool_1_all.deb">package</a>')
+        downloads += 1
+        return httpx.Response(200, content=deb)
+
+    values = _values()
+    if kind != "github_release":
+        values.update(kind="direct_url", location="https://example.test/pool/" +
+                      ("tool_1_all.deb" if kind == "direct_url" else ""))
+    conn = connect(ready)
+    source = create_source(ready, conn, values)
+    original_sign = publishing.sign_release
+
+    def fail_sign(*args):
+        raise OSError("test signing unavailable")
+
+    monkeypatch.setattr(publishing, "sign_release", fail_sign)
+    with httpx.Client(transport=httpx.MockTransport(handler)) as remote:
+        assert sync_source_once(ready, source.id, client=remote)
+        assert get_source(conn, source.id).last_status == "error"
+        assert get_setting(conn, "publish_dirty") == "1"
+        assert conn.execute("SELECT status FROM source_artifacts").fetchone()[0] == "imported"
+        assert queue_source(conn, source.id)
+        # A second failure must remain an error, even with no new remote assets.
+        assert sync_source_once(ready, source.id, client=remote)
+        assert get_source(conn, source.id).last_status == "error"
+        monkeypatch.setattr(publishing, "sign_release", original_sign)
+        assert queue_source(conn, source.id)
+        assert sync_source_once(ready, source.id, client=remote)
+    assert get_source(conn, source.id).last_status == "success"
+    assert get_setting(conn, "publish_dirty") == "0"
+    assert conn.execute("SELECT count(*) FROM packages").fetchone()[0] == 1
+    assert "Package: retry-tool" in (ready.dists_dir / "stable/main/binary-amd64/Packages").read_text()
+    if kind != "direct_url":
+        assert downloads == 1
+    conn.close()
+
+
+@pytest.mark.parametrize("failure", ["token", "client"])
+def test_sync_initialization_failure_finishes_run_and_can_be_requeued(ready, monkeypatch, failure):
+    conn = connect(ready)
+    source = create_source(ready, conn, _values(), "synthetic-token")
+    if failure == "token":
+        conn.execute("UPDATE package_sources SET token_encrypted='invalid' WHERE id=?", (source.id,))
+    else:
+        def fail_client(**kwargs):
+            raise ValueError("test client initialization failed")
+        monkeypatch.setattr("prvaptmirror.source_sync.httpx.Client", fail_client)
+    assert sync_source_once(ready, source.id)
+    saved = get_source(conn, source.id)
+    assert saved.last_status == "error"
+    assert saved.consecutive_failures == 1
+    run = conn.execute("SELECT * FROM source_runs WHERE source_id=?", (source.id,)).fetchone()
+    assert run["status"] == "error"
+    assert run["finished_at"]
+    assert queue_source(conn, source.id)
+    assert get_source(conn, source.id).last_status == "queued"
+    conn.close()
+
+
+def test_idle_scheduler_recovers_publish_and_pending_delete(ready, tmp_path, monkeypatch):
+    from prvaptmirror import publish as publishing
+    from prvaptmirror.db import get_setting
+    from prvaptmirror.debparse import parse_deb
+    from prvaptmirror.source_sync import run_due_sources
+
+    incoming = build_deb(tmp_path / "delete-retry.deb", package="delete-retry")
+    parsed = parse_deb(incoming, allowed_archs=ready.architectures)
+    conn = connect(ready)
+    results, published = publishing.upload_commit(ready, conn, [(parsed, incoming)], user_id=None)
+    assert published.ok
+    original_sign = publishing.sign_release
+
+    def fail_sign(*args):
+        raise OSError("test signing unavailable")
+
+    monkeypatch.setattr(publishing, "sign_release", fail_sign)
+    assert not publishing.delete_commit(ready, conn, results[0]["id"]).ok
+    assert run_due_sources(ready) == 0
+    assert get_setting(conn, "publish_dirty") == "1"
+    monkeypatch.setattr(publishing, "sign_release", original_sign)
+    assert run_due_sources(ready) == 0
+    assert get_setting(conn, "publish_dirty") == "0"
+    assert conn.execute("SELECT count(*) FROM packages").fetchone()[0] == 0
+    assert not (ready.repo_dir / results[0]["filename"]).exists()
+    conn.close()
+
+
 def test_github_release_sync_imports_once_and_publishes(ready, tmp_path):
     deb = build_deb(
         tmp_path / "tool_2.0-1_amd64.deb",

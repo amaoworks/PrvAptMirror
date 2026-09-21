@@ -363,7 +363,7 @@ with gzip.GzipFile(filename="", mode="wb", fileobj=buf, mtime=0) as gz:
 Archive: stable
 Origin: PrvAptMirror
 Label: prvapt
-Acquire-By-Hash: no
+Acquire-By-Hash: yes
 Component: main
 Architecture: amd64
 ```
@@ -383,7 +383,7 @@ Date: Wed, 19 Aug 2026 12:00:00 UTC
 Architectures: amd64 arm64 all
 Components: main
 Description: Personal apt repository
-Acquire-By-Hash: no
+Acquire-By-Hash: yes
 MD5Sum:
  <md5>                0 main/binary-all/Packages
  <md5>               <n> main/binary-all/Packages.gz
@@ -408,7 +408,7 @@ SHA256:
 - 每一行：一个空格 + hex + 一个空格 + **右对齐到 16 列**的十进制 size + 一个空格 + 相对路径。空 `Packages` 的 size 为 `0`。
 - 哈希表路径按字典序（`main/binary-all/...` 先于 `main/binary-amd64/...`）。
 - **不设置 `Valid-Until`**（v1 固定关）。
-- **不做 by-hash 索引**（`Acquire-By-Hash: no`）。原子性靠 `RENAME_EXCHANGE`，不靠 by-hash。
+- **启用 SHA256 by-hash 索引**（`Acquire-By-Hash: yes`）。`RENAME_EXCHANGE` 保证目录原子替换；by-hash 保证客户端跨发布请求时仍能读取与旧 Release 匹配的索引。保留最近 7 天的哈希文件，并为每个当前索引至少保留两个历史版本。
 - 不生成 `Contents-*`、`Translation-*`。客户端 404 这些是正常的。
 
 `InRelease`：对 **与 `Release` 字节完全相同** 的内容做 OpenPGP **clearsign**。签名前不得改写行尾、不得给空 `Packages` 补 `\n`。现代 apt 只拉 `InRelease`；仍同时写 `Release` + `Release.gpg`（detached）给旧客户端。

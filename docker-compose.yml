@@ -2,6 +2,7 @@
 # TLS / reverse proxy belongs on the host.
 services:
   app:
+    restart: unless-stopped
     image: ${PRVAPT_IMAGE:-ghcr.io/amaoworks/prvaptmirror:latest}
     pull_policy: always
     user: "1000:1000"
@@ -19,7 +20,8 @@ services:
     volumes:
       - ${PRVAPT_HOST_DATA:-./data}:/var/lib/prvaptmirror
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=2)"]
+      start_period: 30s
       interval: 5s
       timeout: 3s
       retries: 20

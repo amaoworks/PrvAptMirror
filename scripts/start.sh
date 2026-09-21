@@ -166,12 +166,14 @@ fi
 if [ "$ACTION" = status ]; then
   if have_compose; then compose ps || true; fi
   if [ -f "$RUNTIME" ]; then
-    set -a
-    # shellcheck disable=SC1090
-    . "$RUNTIME"
-    set +a
+    # Read only a numeric port; dotenv files must never be executed as shell code.
+    while IFS= read -r line; do
+      if [[ "$line" =~ ^PRVAPT_PORT=\"?([0-9]+)\"?$ ]]; then
+        PORT="${BASH_REMATCH[1]}"
+      fi
+    done < "$RUNTIME"
   fi
-  curl -fsS "http://127.0.0.1:${PRVAPT_PORT:-$PORT}/healthz" && echo || echo "(healthz 不可达)"
+  curl -fsS "http://127.0.0.1:${PORT}/readyz" && echo || echo "(仓库尚未就绪)"
   exit 0
 fi
 
@@ -229,25 +231,40 @@ if find "$ROOT/data" -xdev ! -uid 1000 -print -quit 2>/dev/null | grep -q .; the
 fi
 
 umask 077
+# Compose dotenv quoting is different from shell quoting. Preserve arbitrary
+# password characters and never source this file, including in native mode.
+write_env() {
+  local value="$2"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//\$/\$\$}"
+  value="${value//$'\n'/\\n}"
+  value="${value//$'\r'/\\r}"
+  value="${value//$'\t'/\\t}"
+  printf '%s="%s"\n' "$1" "$value"
+}
 {
-  echo "PRVAPT_HOST_DATA=$ROOT/data"
-  echo "PRVAPT_IMAGE=${PRVAPT_IMAGE:-ghcr.io/amaoworks/prvaptmirror:latest}"
-  echo "PRVAPT_BIND_HOST=$BIND_HOST"
-  echo "PRVAPT_PORT=$PORT"
-  echo "PRVAPT_PUBLIC_URL=$PUBLIC_URL"
-  echo "PRVAPT_ADMIN_ORIGINS=$ORIGINS"
-  echo "PRVAPT_ADMIN_USER=${PRVAPT_ADMIN_USER:-admin}"
-  echo "PRVAPT_ADMIN_PASSWORD=$PASSWORD"
-  echo "PRVAPT_COOKIE_SECURE=$COOKIE_SECURE"
-  echo "PRVAPT_ORIGIN_CHECK=$ORIGIN_CHECK"
-  echo "PRVAPT_DATA_DIR=$ROOT/data"
+  write_env PRVAPT_HOST_DATA "$ROOT/data"
+  write_env PRVAPT_IMAGE "${PRVAPT_IMAGE:-ghcr.io/amaoworks/prvaptmirror:latest}"
+  write_env PRVAPT_BIND_HOST "$BIND_HOST"
+  write_env PRVAPT_PORT "$PORT"
+  write_env PRVAPT_PUBLIC_URL "$PUBLIC_URL"
+  write_env PRVAPT_ADMIN_ORIGINS "$ORIGINS"
+  write_env PRVAPT_ADMIN_USER "${PRVAPT_ADMIN_USER:-admin}"
+  write_env PRVAPT_ADMIN_PASSWORD "$PASSWORD"
+  write_env PRVAPT_COOKIE_SECURE "$COOKIE_SECURE"
+  write_env PRVAPT_ORIGIN_CHECK "$ORIGIN_CHECK"
+  write_env PRVAPT_DATA_DIR "$ROOT/data"
 } > "$RUNTIME"
 chmod 600 "$RUNTIME"
 
-set -a
-# shellcheck disable=SC1090
-. "$RUNTIME"
-set +a
+export PRVAPT_HOST_DATA="$ROOT/data"
+export PRVAPT_IMAGE="${PRVAPT_IMAGE:-ghcr.io/amaoworks/prvaptmirror:latest}"
+export PRVAPT_BIND_HOST="$BIND_HOST" PRVAPT_PORT="$PORT"
+export PRVAPT_PUBLIC_URL="$PUBLIC_URL" PRVAPT_ADMIN_ORIGINS="$ORIGINS"
+export PRVAPT_ADMIN_USER="${PRVAPT_ADMIN_USER:-admin}" PRVAPT_ADMIN_PASSWORD="$PASSWORD"
+export PRVAPT_COOKIE_SECURE="$COOKIE_SECURE" PRVAPT_ORIGIN_CHECK="$ORIGIN_CHECK"
+export PRVAPT_DATA_DIR="$ROOT/data"
 
 if [ -z "$ENGINE" ]; then
   if have_compose; then ENGINE=docker; else ENGINE=dev; fi
@@ -279,7 +296,7 @@ PrvAptMirror 已启动
   地址校验: $([ "$ORIGIN_CHECK" = 1 ] && echo "开 (--origin-check)" || echo "关（默认）")
 EOF
   print_urls
-  echo "  健康检查: http://127.0.0.1:${PORT}/healthz"
+  echo "  就绪检查: http://127.0.0.1:${PORT}/readyz"
   if [ -n "$PASSWORD" ]; then
     echo "  管理员:   ${PRVAPT_ADMIN_USER:-admin} / （已设置 --password）"
   elif [ -f "$ROOT/data/admin-bootstrap.txt" ]; then
@@ -298,7 +315,7 @@ EOF
 wait_health() {
   local i
   for i in $(seq 1 60); do
-    if curl -fsS "http://127.0.0.1:${PORT}/healthz" >/dev/null 2>&1; then
+    if curl -fsS "http://127.0.0.1:${PORT}/readyz" >/dev/null 2>&1; then
       return 0
     fi
     sleep 0.5
