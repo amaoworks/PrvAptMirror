@@ -166,6 +166,16 @@
     .muted { color: var(--muted); }
     .err { color: var(--danger); }
     .ok { color: var(--acc); }
+    .confirm-dialog {
+      width: min(420px, calc(100% - 2rem));
+      box-sizing: border-box;
+      padding: 1.5rem;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--card);
+      color: var(--ink);
+    }
+    .confirm-dialog::backdrop { background: rgba(0, 0, 0, 0.4); }
 
     /* Forms & Inputs */
     label {
@@ -563,6 +573,43 @@
   <main>
     {% block body %}{% endblock %}
   </main>
+  <dialog id="confirm-dialog" class="confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-message">
+    <h2 id="confirm-title">确认操作</h2>
+    <p id="confirm-message"></p>
+    <div class="toolbar" style="justify-content: flex-end; margin-top: 1.25rem;">
+      <button id="confirm-cancel" type="button" class="btn-secondary" autofocus>取消</button>
+      <button id="confirm-accept" type="button" class="danger">确认</button>
+    </div>
+  </dialog>
+  <script>
+    (() => {
+      const dialog = document.getElementById("confirm-dialog");
+      const approved = new WeakSet();
+      let pending = null;
+      document.addEventListener("submit", event => {
+        const form = event.target;
+        if (!form.matches("form[data-confirm]")) return;
+        if (approved.delete(form)) return;
+        event.preventDefault();
+        const count = form.dataset.confirmCount
+          ? new FormData(form).getAll(form.dataset.confirmCount).length : 0;
+        document.getElementById("confirm-message").textContent = form.dataset.confirm.replace("{count}", count);
+        pending = { form, submitter: event.submitter };
+        dialog.showModal();
+      });
+      document.getElementById("confirm-cancel").addEventListener("click", () => dialog.close());
+      dialog.addEventListener("close", () => { pending = null; });
+      document.getElementById("confirm-accept").addEventListener("click", () => {
+        if (!pending) return;
+        const { form, submitter } = pending;
+        pending = null;
+        dialog.close();
+        approved.add(form);
+        form.requestSubmit(submitter || undefined);
+        approved.delete(form);
+      });
+    })();
+  </script>
 </body>
 </html>
 

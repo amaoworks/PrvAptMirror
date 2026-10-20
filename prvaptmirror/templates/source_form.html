@@ -42,7 +42,7 @@
     <input id="asset_pattern" name="asset_pattern" type="text" required value="{{ values.asset_pattern }}"
            placeholder=".*_(amd64|arm64)\.deb$">
     <p class="form-hint muted">GitHub 和 HTTP 目录只下载匹配正则的 <code>.deb</code>；单个固定文件无需设置。</p>
-    <p class="form-hint muted">先点击下方“测试获取与正则”发现平台，再勾选需要同步的平台，生成正则后保存来源。</p>
+    <p class="form-hint muted">先点击下方“测试获取与正则”，再勾选结果中需要同步的具体软件包，生成正则后保存来源。</p>
 
     <div class="form-grid-2">
       <div>
@@ -109,7 +109,7 @@
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <button type="submit" {% if not source.enabled or source.last_status == "running" %}disabled{% endif %}>立即同步</button>
     </form>
-    <form method="post" action="/admin/sources/{{ source.id }}/delete" style="margin:0;" onsubmit="return confirm('删除此来源？已导入的软件包不会删除。')">
+    <form method="post" action="/admin/sources/{{ source.id }}/delete" style="margin:0;" data-confirm="删除此来源？已导入的软件包不会删除。">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <button class="danger" type="submit" {% if source.last_status == "running" %}disabled{% endif %}>删除来源</button>
     </form>
@@ -182,17 +182,38 @@
     const location = document.getElementById("location");
     const test = document.getElementById("github-source-test");
     const result = document.getElementById("source-test-result");
+    const updateSelection = () => {
+      const all = result.querySelector("[data-select-all-assets]");
+      if (!all) return;
+      const items = Array.from(result.querySelectorAll("[data-package-pattern]"));
+      const count = items.filter(item => item.checked).length;
+      all.checked = items.length > 0 && count === items.length;
+      all.indeterminate = count > 0 && count < items.length;
+    };
+    result.addEventListener("change", event => {
+      if (event.target.matches("[data-select-all-assets]")) {
+        result.querySelectorAll("[data-package-pattern]").forEach(item => {
+          item.checked = event.target.checked;
+        });
+      }
+      updateSelection();
+    });
+    result.addEventListener("htmx:afterSwap", updateSelection);
     result.addEventListener("click", event => {
-      if (!event.target.closest("[data-apply-platforms]")) return;
-      const selected = Array.from(result.querySelectorAll("[data-platform-pattern]:checked"));
+      if (!event.target.closest("[data-apply-packages]")) return;
+      const selected = Array.from(result.querySelectorAll("[data-package-pattern]:checked"));
       const pattern = selected.length
-        ? "(?:" + selected.map(item => item.dataset.platformPattern).join("|") + ")"
+        ? "(?:" + Array.from(new Set(selected.map(item => item.dataset.packagePattern))).join("|") + ")"
         : "(?!)";
+      const feedback = result.querySelector("[data-package-feedback]");
+      if (pattern.length > 500) {
+        feedback.textContent = "生成的正则超过 500 个字符，请减少选择或手动简化正则。";
+        return;
+      }
       const input = document.getElementById("asset_pattern");
       input.value = pattern;
       input.dispatchEvent(new Event("input", { bubbles: true }));
-      result.querySelector("[data-platform-feedback]").textContent =
-        `已写入正则，选择 ${selected.length} 个平台；保存来源后生效。`;
+      feedback.textContent = `已写入正则，选择 ${selected.length} 个软件包；保存来源后生效。`;
     });
     const update = () => {
       test.hidden = kind.value !== "github_release" &&
@@ -200,6 +221,7 @@
     };
     kind.addEventListener("change", update);
     location.addEventListener("input", update);
+    updateSelection();
     update();
   })();
 </script>

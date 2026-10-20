@@ -82,7 +82,7 @@ from prvaptmirror.settings import (
     repository_settings_changed,
     save_app_config,
 )
-from prvaptmirror.source_sync import preview_github_source, preview_http_directory, preview_platform_choices
+from prvaptmirror.source_sync import preview_github_source, preview_http_directory, preview_package_patterns
 
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
@@ -663,7 +663,7 @@ async def source_test(
     return templates.TemplateResponse(
         request,
         "source_test_result.html",
-        {"error": None, "preview": preview, "platforms": preview_platform_choices(preview, cfg.architectures)},
+        {"error": None, "preview": preview, "package_patterns": preview_package_patterns(preview)},
     )
 
 

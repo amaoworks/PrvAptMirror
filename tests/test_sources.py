@@ -8,7 +8,7 @@ from prvaptmirror.source_sync import (
     SourceScheduler,
     preview_github_source,
     preview_http_directory,
-    preview_platform_choices,
+    preview_package_patterns,
     recover_interrupted_source_runs,
     sync_source_once,
 )
@@ -409,13 +409,12 @@ def test_github_source_preview_uses_sync_selection_rules():
     assert [asset.selected for asset in preview.assets] == [True, False, False]
     assert preview.assets[1].is_deb and not preview.assets[1].pattern_matches
     assert not preview.assets[2].is_deb
-    choices = preview_platform_choices(preview, ("amd64", "arm64", "all"))
-    assert [item["architecture"] for item in choices] == ["amd64", "arm64"]
-    assert [item["selected"] for item in choices] == [True, False]
+    patterns = preview_package_patterns(preview)
+    assert set(patterns) == {"tool_2.0.0_amd64.deb", "tool_2.0.0_arm64.deb"}
     client.close()
 
 
-def test_generated_platform_pattern_filters_future_versions_and_retention(ready, tmp_path):
+def test_generated_package_pattern_filters_future_versions_and_retention(ready, tmp_path):
     import re
 
     from prvaptmirror.settings import ensure_app_settings, save_app_config
@@ -427,14 +426,17 @@ def test_generated_platform_pattern_filters_future_versions_and_retention(ready,
         GitHubAssetPreview("v1", "tool_1.0_arm64.deb", 10, True, True),
         GitHubAssetPreview("v0", "tool_0.9_amd64.deb", 10, True, True),
         GitHubAssetPreview("v1", "tool_1.0_i386.deb", 10, True, True),
+        GitHubAssetPreview("v1", "tool-helper_1.0_amd64.deb", 10, True, True),
         GitHubAssetPreview("v1", "tool.zip", 10, False, True),
     ))
-    choices = preview_platform_choices(preview, ready.architectures)
-    assert len(choices) == 3
-    assert not next(item for item in choices if item["architecture"] == "i386")["allowed"]
-    pattern = "(?:" + "|".join(item["pattern"] for item in choices if item["architecture"] == "amd64") + ")"
+    patterns = preview_package_patterns(preview)
+    assert len(patterns) == 5
+    assert patterns["tool_1.0_amd64.deb"] == patterns["tool_0.9_amd64.deb"]
+    pattern = patterns["tool_1.0_amd64.deb"]
     assert re.search(pattern, "tool_20.10~rc1_amd64.deb")
     assert not re.search(pattern, "tool_20.10~rc1_arm64.deb")
+    assert not re.search(pattern, "tool-helper_20.10_amd64.deb")
+    assert not re.search(pattern, "another_20.10_amd64.deb")
     assert not re.search(pattern, "tool_20.10~rc1_amd64.deb.sig")
     payloads = {}
     assets = []
@@ -445,6 +447,7 @@ def test_generated_platform_pattern_filters_future_versions_and_retention(ready,
         ).read_bytes()
         assets.append({"id": number, "name": filename, "url": f"https://api.github.com/assets/{number}"})
     assets.append({"id": 99, "name": "tool_4.0_arm64.deb", "url": "https://api.github.com/assets/99"})
+    assets.append({"id": 98, "name": "tool-helper_4.0_amd64.deb", "url": "https://api.github.com/assets/98"})
     requested = []
 
     def handler(request):
@@ -470,6 +473,21 @@ def test_generated_platform_pattern_filters_future_versions_and_retention(ready,
         assert sync_source_once(ready, source.id, client=remote)
     assert requested == ["/assets/2", "/assets/3", "/assets/4"]
     conn.close()
+
+
+def test_nonstandard_package_pattern_matches_only_the_selected_filename():
+    import re
+
+    from prvaptmirror.source_sync import GitHubAssetPreview, GitHubSourcePreview
+
+    filename = "Tool+(special).deb"
+    preview = GitHubSourcePreview("acme/tool", 1, (
+        GitHubAssetPreview("v1", filename, 10, True, True),
+    ))
+    pattern = preview_package_patterns(preview)[filename]
+    assert re.search(pattern, filename)
+    assert not re.search(pattern, "Toolllllspecial.deb")
+    assert not re.search(pattern, "Other-" + filename)
 
 
 def test_direct_url_uses_conditional_request_and_skips_same_content(ready, tmp_path):

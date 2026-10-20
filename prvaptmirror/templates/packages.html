@@ -39,7 +39,7 @@
   </form>
 
   <form id="package-bulk-delete" method="post" action="/admin/packages/delete"
-        onsubmit="return confirm('确认删除所选的 ' + this.querySelectorAll('input[name=package_ids]:checked').length + ' 个软件包？')">
+        data-confirm="确认删除所选的 {count} 个软件包？" data-confirm-count="package_ids">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div class="toolbar" style="margin-bottom: 0.75rem;">
       <button id="delete-selected" class="danger" type="submit" disabled>删除所选</button>

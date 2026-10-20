@@ -465,9 +465,11 @@ def test_source_form_can_preview_github_asset_matches(client, monkeypatch):
     assert "将抓取" in response.text
     assert "正则未命中" in response.text
     assert "不是 .deb" in response.text
-    assert "发现 2 个平台" in response.text
-    assert 'data-platform-pattern="' in response.text
-    assert "按所选平台生成正则" in response.text
+    assert response.text.count('data-package-pattern="') == 2
+    assert 'aria-label="选择 tool_2.0.0_amd64.deb"' in response.text
+    assert 'aria-label="选择 tool_2.0.0_arm64.deb"' in response.text
+    assert "按所选软件包生成正则" in response.text
+    assert "data-platform-pattern" not in response.text
     assert "temporary-token" not in response.text
     conn = connect(client.app.state.base_cfg)
     assert conn.execute("SELECT count(*) FROM package_sources").fetchone()[0] == 0
@@ -531,6 +533,7 @@ def test_source_form_can_preview_http_directory_and_download_probe(client, monke
     assert "tool_2.0_all.deb" in response.text
     assert "最新版，可导入" in response.text
     assert "较旧版本" in response.text
+    assert response.text.count('data-package-pattern="') == 2
 
 
 def test_source_preview_shows_regex_validation_without_requesting_github(client):
