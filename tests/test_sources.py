@@ -8,6 +8,7 @@ from prvaptmirror.source_sync import (
     SourceScheduler,
     preview_github_source,
     preview_http_directory,
+    preview_platform_choices,
     recover_interrupted_source_runs,
     sync_source_once,
 )
@@ -408,7 +409,67 @@ def test_github_source_preview_uses_sync_selection_rules():
     assert [asset.selected for asset in preview.assets] == [True, False, False]
     assert preview.assets[1].is_deb and not preview.assets[1].pattern_matches
     assert not preview.assets[2].is_deb
+    choices = preview_platform_choices(preview, ("amd64", "arm64", "all"))
+    assert [item["architecture"] for item in choices] == ["amd64", "arm64"]
+    assert [item["selected"] for item in choices] == [True, False]
     client.close()
+
+
+def test_generated_platform_pattern_filters_future_versions_and_retention(ready, tmp_path):
+    import re
+
+    from prvaptmirror.settings import ensure_app_settings, save_app_config
+    from prvaptmirror.source_sync import GitHubAssetPreview, GitHubSourcePreview
+    from dataclasses import replace
+
+    preview = GitHubSourcePreview("acme/tool", 1, (
+        GitHubAssetPreview("v1", "tool_1.0_amd64.deb", 10, True, True),
+        GitHubAssetPreview("v1", "tool_1.0_arm64.deb", 10, True, True),
+        GitHubAssetPreview("v0", "tool_0.9_amd64.deb", 10, True, True),
+        GitHubAssetPreview("v1", "tool_1.0_i386.deb", 10, True, True),
+        GitHubAssetPreview("v1", "tool.zip", 10, False, True),
+    ))
+    choices = preview_platform_choices(preview, ready.architectures)
+    assert len(choices) == 3
+    assert not next(item for item in choices if item["architecture"] == "i386")["allowed"]
+    pattern = "(?:" + "|".join(item["pattern"] for item in choices if item["architecture"] == "amd64") + ")"
+    assert re.search(pattern, "tool_20.10~rc1_amd64.deb")
+    assert not re.search(pattern, "tool_20.10~rc1_arm64.deb")
+    assert not re.search(pattern, "tool_20.10~rc1_amd64.deb.sig")
+    payloads = {}
+    assets = []
+    for number in (2, 3, 4):
+        filename = f"tool_{number}.0_amd64.deb"
+        payloads[f"/assets/{number}"] = build_deb(
+            tmp_path / filename, package="platform-tool", version=f"{number}.0", architecture="amd64"
+        ).read_bytes()
+        assets.append({"id": number, "name": filename, "url": f"https://api.github.com/assets/{number}"})
+    assets.append({"id": 99, "name": "tool_4.0_arm64.deb", "url": "https://api.github.com/assets/99"})
+    requested = []
+
+    def handler(request):
+        if request.url.path == "/repos/acme/tool/releases":
+            return httpx.Response(200, json=[{"tag_name": "v4", "assets": assets}])
+        requested.append(request.url.path)
+        assert request.url.path in payloads
+        return httpx.Response(200, content=payloads[request.url.path])
+
+    conn = connect(ready)
+    ensure_app_settings(conn, ready)
+    save_app_config(conn, replace(ready, package_keep_versions=1))
+    source = create_source(ready, conn, _values(asset_pattern=pattern))
+    assert get_source(conn, source.id).asset_pattern == pattern
+    with httpx.Client(transport=httpx.MockTransport(handler)) as remote:
+        assert sync_source_once(ready, source.id, client=remote)
+        assert get_source(conn, source.id).last_status == "success"
+        assert [p[0] for p in conn.execute("SELECT version FROM packages")] == ["4.0"]
+        artifacts = conn.execute("SELECT status, package_id FROM source_artifacts ORDER BY id").fetchall()
+        assert [row["status"] for row in artifacts] == ["imported"] * 3
+        assert [row["package_id"] is None for row in artifacts] == [True, True, False]
+        assert queue_source(conn, source.id)
+        assert sync_source_once(ready, source.id, client=remote)
+    assert requested == ["/assets/2", "/assets/3", "/assets/4"]
+    conn.close()
 
 
 def test_direct_url_uses_conditional_request_and_skips_same_content(ready, tmp_path):

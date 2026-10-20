@@ -27,6 +27,7 @@ APP_SETTING_NAMES = (
     "max_upload_mb",
     "max_upload_files",
     "session_days",
+    "package_keep_versions",
 )
 REPOSITORY_SETTING_NAMES = frozenset(
     {"suite", "codename", "component", "architectures", "origin", "label"}
@@ -53,6 +54,7 @@ def app_setting_values(cfg: Config) -> dict[str, str]:
         "max_upload_mb": str(cfg.max_upload_mb),
         "max_upload_files": str(cfg.max_upload_files),
         "session_days": str(cfg.session_days),
+        "package_keep_versions": str(cfg.package_keep_versions),
     }
 
 
@@ -135,6 +137,9 @@ def config_from_app_values(base: Config, values: dict[str, str]) -> Config:
         ),
         session_days=_bounded_int(
             "会话有效期", values.get("session_days", ""), 1, 365
+        ),
+        package_keep_versions=_bounded_int(
+            "软件包保留版本数", values.get("package_keep_versions", str(base.package_keep_versions)), 1, 100
         ),
     )
     validate_startup(cfg)

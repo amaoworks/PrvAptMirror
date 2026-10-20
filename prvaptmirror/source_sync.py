@@ -57,6 +57,41 @@ class GitHubAssetPreview:
         return self.is_deb and self.pattern_matches
 
 
+def preview_platform_choices(preview, allowed_archs: tuple[str, ...]) -> list[dict]:
+    """Build version-independent filename suffix rules from discovered .debs."""
+    groups: dict[str, dict] = {}
+    aliases = {"x86_64": "amd64", "aarch64": "arm64", "i686": "i386", "ppc64le": "ppc64el"}
+    for asset in preview.assets:
+        if not asset.is_deb:
+            continue
+        identity = _directory_deb_identity(asset.filename)
+        if identity:
+            architecture = aliases.get(identity[2], identity[2])
+            suffix = "_" + identity[2]
+        else:
+            match = re.search(
+                r"([_-])(amd64|arm64|armhf|armel|i386|i686|x86_64|aarch64|riscv64|ppc64el|ppc64le|s390x|mips64el|mipsel|loong64|all)\.deb$",
+                asset.filename, re.IGNORECASE,
+            )
+            if not match:
+                continue
+            token = match[2].lower()
+            architecture = aliases.get(token, token)
+            suffix = match[1] + token
+        group = groups.setdefault(architecture, {
+            "architecture": architecture, "suffixes": set(),
+            "selected": False, "allowed": architecture in allowed_archs,
+        })
+        group["suffixes"].add(re.escape(suffix))
+        group["selected"] = group["selected"] or asset.pattern_matches
+    choices = []
+    for architecture in sorted(groups):
+        group = groups[architecture]
+        group["pattern"] = "(?:" + "|".join(sorted(group.pop("suffixes"))) + r")\.deb$"
+        choices.append(group)
+    return choices
+
+
 @dataclass(frozen=True)
 class GitHubSourcePreview:
     repository: str
@@ -689,7 +724,8 @@ def _finish_artifact(
     conn.execute(
         """
         UPDATE source_artifacts SET status = ?, size = COALESCE(?, size),
-          sha256 = COALESCE(?, sha256), package_id = ?, finished_at = ?, error = ?
+          sha256 = COALESCE(?, sha256),
+          package_id = (SELECT id FROM packages WHERE id = ?), finished_at = ?, error = ?
         WHERE id = ?
         """,
         (

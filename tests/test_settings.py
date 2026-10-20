@@ -20,6 +20,7 @@ def test_settings_are_seeded_once_and_then_owned_by_database(cfg):
     ensure_app_settings(conn, cfg)
     values = app_setting_values(cfg)
     values["public_url"] = "https://apt.example.com"
+    values["package_keep_versions"] = "2"
     changed = config_from_app_values(cfg, values)
     save_app_config(conn, changed)
 
@@ -30,6 +31,7 @@ def test_settings_are_seeded_once_and_then_owned_by_database(cfg):
 
     assert loaded.public_url == "https://apt.example.com"
     assert loaded.architectures == ("amd64", "arm64", "all")
+    assert loaded.package_keep_versions == 2
 
 
 @pytest.mark.parametrize(
@@ -45,6 +47,9 @@ def test_settings_are_seeded_once_and_then_owned_by_database(cfg):
         ("max_upload_mb", "0"),
         ("max_upload_files", "101"),
         ("session_days", "366"),
+        ("package_keep_versions", "0"),
+        ("package_keep_versions", "101"),
+        ("package_keep_versions", "bad"),
     ],
 )
 def test_invalid_settings_are_rejected(cfg, field, value):

@@ -38,10 +38,18 @@
     {% endif %}
   </form>
 
+  <form id="package-bulk-delete" method="post" action="/admin/packages/delete"
+        onsubmit="return confirm('确认删除所选的 ' + this.querySelectorAll('input[name=package_ids]:checked').length + ' 个软件包？')">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="toolbar" style="margin-bottom: 0.75rem;">
+      <button id="delete-selected" class="danger" type="submit" disabled>删除所选</button>
+      <span id="selected-count" class="muted">已选择 0 个</span>
+    </div>
   <div class="table-responsive">
     <table>
       <thead>
         <tr>
+          <th><input id="select-all-packages" type="checkbox" aria-label="全选当前列表"></th>
           <th style="width: 32%;">软件包名称</th>
           <th style="width: 26%;">版本</th>
           <th style="width: 14%;">架构</th>
@@ -52,6 +60,7 @@
       <tbody>
       {% for p in packages %}
         <tr>
+          <td><input name="package_ids" type="checkbox" value="{{ p.id }}" aria-label="选择 {{ p.name }} {{ p.version }} {{ p.architecture }}"></td>
           <td><a href="/admin/packages/{{ p.id }}" style="font-weight: 500; text-decoration: none; color: var(--acc);">{{ p.name }}</a></td>
           <td><code>{{ p.version }}</code></td>
           <td><span class="badge badge-mute">{{ p.architecture }}</span></td>
@@ -66,10 +75,31 @@
           <td style="text-align: right; font-family: 'IBM Plex Mono', monospace; font-size: 0.88rem;">{{ p.size | humansize }}</td>
         </tr>
       {% else %}
-        <tr><td colspan="5" class="muted" style="text-align:center; padding: 2.5rem 1rem;">暂无软件包。</td></tr>
+        <tr><td colspan="6" class="muted" style="text-align:center; padding: 2.5rem 1rem;">暂无软件包。</td></tr>
       {% endfor %}
       </tbody>
     </table>
   </div>
+  </form>
 </div>
+<script>
+  (() => {
+    const form = document.getElementById("package-bulk-delete");
+    const all = document.getElementById("select-all-packages");
+    const items = Array.from(form.querySelectorAll('input[name="package_ids"]'));
+    const update = () => {
+      const count = items.filter(item => item.checked).length;
+      document.getElementById("delete-selected").disabled = count === 0;
+      document.getElementById("selected-count").textContent = `已选择 ${count} 个`;
+      all.checked = items.length > 0 && count === items.length;
+      all.indeterminate = count > 0 && count < items.length;
+    };
+    all.addEventListener("change", () => {
+      items.forEach(item => { item.checked = all.checked; });
+      update();
+    });
+    items.forEach(item => item.addEventListener("change", update));
+    update();
+  })();
+</script>
 {% endblock %}

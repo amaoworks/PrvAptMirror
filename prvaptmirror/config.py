@@ -53,6 +53,7 @@ class Config:
     gpg_fingerprint: str | None
     gpg_passphrase_file: Path | None
     session_days: int
+    package_keep_versions: int = 3
 
     @property
     def repo_dir(self) -> Path:

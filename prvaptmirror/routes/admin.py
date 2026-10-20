@@ -49,6 +49,8 @@ from prvaptmirror.events import emit
 from prvaptmirror.models import User
 from prvaptmirror.publish import (
     delete_commit,
+    delete_many_commit,
+    finish_retention,
     publish,
     publish_lock,
     publish_unlocked,
@@ -80,7 +82,7 @@ from prvaptmirror.settings import (
     repository_settings_changed,
     save_app_config,
 )
-from prvaptmirror.source_sync import preview_github_source, preview_http_directory
+from prvaptmirror.source_sync import preview_github_source, preview_http_directory, preview_platform_choices
 
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
@@ -661,7 +663,7 @@ async def source_test(
     return templates.TemplateResponse(
         request,
         "source_test_result.html",
-        {"error": None, "preview": preview},
+        {"error": None, "preview": preview, "platforms": preview_platform_choices(preview, cfg.architectures)},
     )
 
 
@@ -826,6 +828,7 @@ async def settings_post(
     max_upload_mb: Annotated[str, Form()] = "",
     max_upload_files: Annotated[str, Form()] = "",
     session_days: Annotated[str, Form()] = "",
+    package_keep_versions: Annotated[str, Form()] = "",
     confirm_repository_change: Annotated[str, Form()] = "",
 ):
     user = current_user(request)
@@ -849,6 +852,7 @@ async def settings_post(
         "max_upload_mb": max_upload_mb,
         "max_upload_files": max_upload_files,
         "session_days": session_days,
+        "package_keep_versions": package_keep_versions or str(current.package_keep_versions),
     }
     try:
         candidate = config_from_app_values(request.app.state.base_cfg, values)
@@ -869,7 +873,10 @@ async def settings_post(
         conn = connect(base)
         try:
             before = load_app_config(base, conn)
-            if not repository_settings_changed(before, candidate):
+            if (
+                not repository_settings_changed(before, candidate)
+                and before.package_keep_versions == candidate.package_keep_versions
+            ):
                 with transaction(conn):
                     save_app_config(conn, candidate)
                 return None
@@ -877,7 +884,7 @@ async def settings_post(
             with publish_lock(before):
                 set_setting(conn, SETTINGS_PENDING_KEY, "1")
                 try:
-                    result = publish_unlocked(candidate, conn)
+                    result = publish_unlocked(candidate, conn, retire_versions=False)
                     if not result.ok:
                         raise _SettingsPublishFailure(result.error or "索引重建失败")
                     with transaction(conn):
@@ -892,6 +899,7 @@ async def settings_post(
                         return f"{exc}；旧配置索引恢复也失败：{recovery.error}"
                     set_setting(conn, SETTINGS_PENDING_KEY, "0")
                     return f"{exc}；设置已回滚"
+                finish_retention(candidate, conn)
             return None
         finally:
             conn.close()
@@ -927,6 +935,36 @@ def packages_list(request: Request, q: str = "", arch: str = ""):
     )
     _attach_csrf(request, response, user)
     return response
+
+
+@router.post("/packages/delete")
+async def delete_packages(
+    request: Request,
+    csrf_token: Annotated[str, Form()] = "",
+    package_ids: Annotated[list[int], Form()] = [],
+):
+    user = current_user(request)
+    if user is None:
+        return RedirectResponse("/admin/login", status_code=303)
+    if user.must_change_password:
+        return RedirectResponse("/admin/password", status_code=303)
+    cfg = _cfg(request)
+    if not verify_csrf(request, cfg, csrf_token, _csrf_expected(request, user)):
+        return HTMLResponse("CSRF 校验失败", status_code=403)
+    if not package_ids:
+        return RedirectResponse("/admin/packages?err=" + quote("请先选择要删除的软件包"), status_code=303)
+
+    def work():
+        conn = connect(cfg)
+        try:
+            return delete_many_commit(cfg, conn, package_ids)
+        finally:
+            conn.close()
+
+    result = await run_in_threadpool(work)
+    if not result.ok:
+        return RedirectResponse("/admin/packages?err=publish", status_code=303)
+    return RedirectResponse("/admin/packages?deleted=1", status_code=303)
 
 
 @router.get("/packages/{package_id}", response_class=HTMLResponse)
@@ -1125,7 +1163,7 @@ async def password_post(
     expected = _csrf_expected(request, user)
     if not verify_csrf(request, cfg, csrf_token, expected):
         return HTMLResponse("CSRF 校验失败", status_code=403)
-    if len(new_password) < 10 or new_password != new_password2:
+    if len(new_password) < 8 or new_password != new_password2:
         response = templates.TemplateResponse(
             request,
             "password.html",
@@ -1133,7 +1171,7 @@ async def password_post(
                 request,
                 user,
                 expected,
-                {"forced": user.must_change_password, "error": "两次输入须一致且至少 10 个字符"},
+                {"forced": user.must_change_password, "error": "两次输入须一致且至少 8 个字符"},
             ),
             status_code=400,
         )

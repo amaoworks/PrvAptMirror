@@ -11,8 +11,8 @@ from prvaptmirror.db import get_user_by_username, init_db
 
 
 def reset_password(cfg, username: str, password: str) -> None:
-    if len(password) < 10:
-        raise ValueError("password must contain at least 10 characters")
+    if len(password) < 8:
+        raise ValueError("password must contain at least 8 characters")
     conn = init_db(cfg)
     try:
         user = get_user_by_username(conn, username)

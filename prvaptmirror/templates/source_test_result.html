@@ -1,3 +1,19 @@
+{% if not error and platforms %}
+  <div style="margin-top: 1rem;">
+    <p class="form-hint">发现 {{ platforms | length }} 个平台（架构）。勾选需要同步的平台，生成的正则适用于后续版本。</p>
+    {% for platform in platforms %}
+      <label class="checkbox-label">
+        <input type="checkbox" data-platform-pattern="{{ platform.pattern }}"
+               value="{{ platform.architecture }}" {% if platform.selected and platform.allowed %}checked{% endif %}
+               {% if not platform.allowed %}disabled{% endif %}>
+        {{ platform.architecture }}{% if not platform.allowed %}（请先在设置中启用此架构）{% endif %}
+      </label>
+    {% endfor %}
+    <button type="button" class="btn-secondary" data-apply-platforms>按所选平台生成正则</button>
+    <span class="muted form-hint" data-platform-feedback aria-live="polite"></span>
+    <p class="muted form-hint">未选择平台时生成不匹配任何文件的正则。无法识别架构的文件请手动设置正则；发现范围受当前 Release 数量和页面显示上限限制。</p>
+  </div>
+{% endif %}
 {% if error %}
   <p class="err flash">{{ error }}</p>
 {% elif preview.directory is defined %}

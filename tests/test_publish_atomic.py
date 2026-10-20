@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import threading
 import time
+from dataclasses import replace
 from pathlib import Path
 
 from prvaptmirror.db import connect, get_package, init_db, list_packages
@@ -175,3 +176,79 @@ def test_startup_reconcile_missing_blob(ready, tmp_path: Path):
         conn.close()
     packages = (ready.dists_dir / ready.suite / "main" / "binary-all" / "Packages").read_text()
     assert "Package: gone\n" not in packages
+
+
+def test_retention_uses_debian_version_order_per_package_and_architecture(ready, tmp_path):
+    cfg = replace(ready, package_keep_versions=2)
+    items = []
+    for name, architecture, versions in (
+        ("retained", "amd64", ("1.9", "1.10~rc1", "1.10", "1:1.0")),
+        ("retained", "arm64", ("1.0", "2.0")),
+        ("separate", "amd64", ("1.0",)),
+    ):
+        for version in versions:
+            deb = build_deb(tmp_path / f"{name}-{architecture}-{version}.deb",
+                            package=name, architecture=architecture, version=version)
+            items.append((parse_deb(deb), deb))
+    conn = connect(cfg)
+    try:
+        results, pub = upload_commit(cfg, conn, items, user_id=None)
+        assert pub.ok
+        rows = list_packages(conn)
+        assert {p.version for p in rows if p.name == "retained" and p.architecture == "amd64"} == {"1.10", "1:1.0"}
+        assert len(rows) == 5
+        for result in results:
+            assert (cfg.repo_dir / result["filename"]).exists() == any(p.id == result["id"] for p in rows)
+        index = (cfg.dists_dir / cfg.suite / "main/binary-amd64/Packages").read_text()
+        assert "Version: 1.9\n" not in index
+        assert "Version: 1.10~rc1\n" not in index
+        assert "Version: 1:1.0\n" in index
+    finally:
+        conn.close()
+
+
+def test_retention_preserves_old_files_when_publish_fails(ready, tmp_path, monkeypatch):
+    from prvaptmirror import publish as publishing
+
+    old, _, _ = _upload(ready, tmp_path, package="safe-retain", version="1")
+    old_blob = ready.repo_dir / old[0]["filename"]
+    old_index = (ready.dists_dir / ready.suite / "InRelease").read_bytes()
+    original_sign = publishing.sign_release
+    monkeypatch.setattr(publishing, "sign_release", lambda *args: (_ for _ in ()).throw(OSError("sign failed")))
+    cfg = replace(ready, package_keep_versions=1)
+    _, pub, _ = _upload(cfg, tmp_path, package="safe-retain", version="2")
+    assert not pub.ok
+    conn = connect(cfg)
+    try:
+        assert len(list_packages(conn, state="active")) == 2
+        assert old_blob.is_file()
+        assert (cfg.dists_dir / cfg.suite / "InRelease").read_bytes() == old_index
+        monkeypatch.setattr(publishing, "sign_release", original_sign)
+        assert publishing.publish(cfg, conn).ok
+        assert [p.version for p in list_packages(conn)] == ["2"]
+        assert not old_blob.exists()
+    finally:
+        conn.close()
+
+
+def test_delete_cleanup_failure_keeps_publish_success_and_retries(ready, tmp_path, monkeypatch):
+    from prvaptmirror import publish as publishing
+
+    results, _, _ = _upload(ready, tmp_path, package="cleanup-retry", version="1")
+    original_unlink = publishing._unlink_blob
+
+    def fail_unlink(*args):
+        raise PermissionError("temporary cleanup failure")
+
+    monkeypatch.setattr(publishing, "_unlink_blob", fail_unlink)
+    conn = connect(ready)
+    try:
+        assert publishing.delete_commit(ready, conn, results[0]["id"]).ok
+        assert get_package(conn, results[0]["id"]).state == "pending_delete"
+        assert (ready.repo_dir / results[0]["filename"]).is_file()
+        monkeypatch.setattr(publishing, "_unlink_blob", original_unlink)
+        assert publishing.retry_pending_publish(ready, conn) is None
+        assert get_package(conn, results[0]["id"]) is None
+        assert not (ready.repo_dir / results[0]["filename"]).exists()
+    finally:
+        conn.close()

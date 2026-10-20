@@ -11,6 +11,8 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
+from debian.debian_support import Version
+
 from prvaptmirror.byhash import HISTORY_FILE, prepare_by_hash
 from prvaptmirror.config import Config
 from prvaptmirror.db import (
@@ -82,7 +84,22 @@ def _quarantine_missing(cfg: Config, conn) -> int:
     return n
 
 
-def publish_unlocked(cfg: Config, conn, *, now: datetime | None = None) -> PublishResult:
+def _split_retained_packages(rows: list[PackageRow], keep: int) -> tuple[list[PackageRow], list[PackageRow]]:
+    groups: dict[tuple[str, str], list[PackageRow]] = {}
+    for row in rows:
+        groups.setdefault((row.name, row.architecture), []).append(row)
+    retained: list[PackageRow] = []
+    expired: list[PackageRow] = []
+    for versions in groups.values():
+        versions.sort(key=lambda row: Version(row.version), reverse=True)
+        retained.extend(versions[:keep])
+        expired.extend(versions[keep:])
+    return retained, expired
+
+
+def publish_unlocked(
+    cfg: Config, conn, *, now: datetime | None = None, retire_versions: bool = True
+) -> PublishResult:
     """Assumes publish.lock is already held. Must not open the lock file."""
     started = time.monotonic()
     started_at = _now_iso()
@@ -104,6 +121,7 @@ def publish_unlocked(cfg: Config, conn, *, now: datetime | None = None) -> Publi
                 present.append(row)
             else:
                 conn.execute("UPDATE packages SET state = 'missing' WHERE id = ?", (row.id,))
+        present, expired = _split_retained_packages(present, cfg.package_keep_versions)
         staging_root = cfg.staging_dir / uuid.uuid4().hex
         staging_suite = staging_root / "dists" / cfg.suite
         staging_suite.mkdir(parents=True, exist_ok=True)
@@ -128,6 +146,13 @@ def publish_unlocked(cfg: Config, conn, *, now: datetime | None = None) -> Publi
             leftover = cfg.repo_dir / "dists.next"
             if leftover.exists():
                 shutil.rmtree(leftover)
+        # Retire versions only after the replacement index is live. A failed
+        # signing/build step must leave the old package files and rows intact.
+        if retire_versions:
+            conn.executemany(
+                "UPDATE packages SET state = 'pending_delete' WHERE id = ?",
+                [(row.id,) for row in expired],
+            )
         duration_ms = int((time.monotonic() - started) * 1000)
         conn.execute(
             """
@@ -138,6 +163,7 @@ def publish_unlocked(cfg: Config, conn, *, now: datetime | None = None) -> Publi
             (_now_iso(), duration_ms, len(present), run_id),
         )
         set_setting(conn, "publish_dirty", "0")
+        _finish_orphaned_pending_deletes(cfg, conn)
         emit("publish_ok", duration_ms=duration_ms, package_count=len(present))
         live_inode = cfg.dists_dir.stat().st_ino if cfg.dists_dir.exists() else None
         return PublishResult(
@@ -180,6 +206,7 @@ def retry_pending_publish(base_cfg: Config, conn) -> PublishResult | None:
     with publish_lock(base_cfg):
         pending_settings = get_setting(conn, SETTINGS_PENDING_KEY, "0") == "1"
         if get_setting(conn, "publish_dirty", "0") != "1" and not pending_settings:
+            _finish_orphaned_pending_deletes(base_cfg, conn)
             return None
         cfg = load_app_config(base_cfg, conn)
         result = publish_unlocked(cfg, conn)
@@ -260,21 +287,24 @@ def _unlink_blob(cfg: Config, filename: str) -> None:
 
 
 def delete_commit(cfg: Config, conn, package_id: int) -> PublishResult:
+    return delete_many_commit(cfg, conn, [package_id])
+
+
+def delete_many_commit(cfg: Config, conn, package_ids: list[int]) -> PublishResult:
     with publish_lock(cfg):
-        row = get_package(conn, package_id)
-        if row is None:
+        rows = [row for package_id in dict.fromkeys(package_ids)
+                if (row := get_package(conn, package_id)) is not None]
+        if not rows:
             return PublishResult(ok=False, error="not found")
-        conn.execute(
+        conn.executemany(
             "UPDATE packages SET state = 'pending_delete' WHERE id = ?",
-            (package_id,),
+            [(row.id,) for row in rows],
         )
         set_setting(conn, "publish_dirty", "1")
         result = publish_unlocked(cfg, conn)
         if result.ok:
-            _unlink_blob(cfg, row.filename)
-            conn.execute("DELETE FROM packages WHERE id = ?", (package_id,))
-            set_setting(conn, "publish_dirty", "0")
-            emit("delete", package=row.name, version=row.version, arch=row.architecture)
+            for row in rows:
+                emit("delete", package=row.name, version=row.version, arch=row.architecture)
         return result
 
 
@@ -284,8 +314,24 @@ def _finish_orphaned_pending_deletes(cfg: Config, conn) -> None:
     if get_setting(conn, "publish_dirty", "0") == "1":
         return
     for row in list_packages(conn, state="pending_delete"):
-        _unlink_blob(cfg, row.filename)
+        try:
+            _unlink_blob(cfg, row.filename)
+        except OSError as exc:
+            emit("package_cleanup_failed", package=row.name, error=str(exc))
+            continue
         conn.execute("DELETE FROM packages WHERE id = ?", (row.id,))
+
+
+def finish_retention(cfg: Config, conn) -> None:
+    """Called under publish.lock after a retention setting has been committed."""
+    rows = [row for row in list_packages(conn, state="active")
+            if (cfg.repo_dir / row.filename).is_file()]
+    _, expired = _split_retained_packages(rows, cfg.package_keep_versions)
+    conn.executemany(
+        "UPDATE packages SET state = 'pending_delete' WHERE id = ?",
+        [(row.id,) for row in expired],
+    )
+    _finish_orphaned_pending_deletes(cfg, conn)
 
 
 def startup_reconcile(cfg: Config, conn) -> None:

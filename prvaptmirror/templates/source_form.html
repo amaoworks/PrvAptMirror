@@ -42,6 +42,7 @@
     <input id="asset_pattern" name="asset_pattern" type="text" required value="{{ values.asset_pattern }}"
            placeholder=".*_(amd64|arm64)\.deb$">
     <p class="form-hint muted">GitHub 和 HTTP 目录只下载匹配正则的 <code>.deb</code>；单个固定文件无需设置。</p>
+    <p class="form-hint muted">先点击下方“测试获取与正则”发现平台，再勾选需要同步的平台，生成正则后保存来源。</p>
 
     <div class="form-grid-2">
       <div>
@@ -180,6 +181,19 @@
     const kind = document.getElementById("kind");
     const location = document.getElementById("location");
     const test = document.getElementById("github-source-test");
+    const result = document.getElementById("source-test-result");
+    result.addEventListener("click", event => {
+      if (!event.target.closest("[data-apply-platforms]")) return;
+      const selected = Array.from(result.querySelectorAll("[data-platform-pattern]:checked"));
+      const pattern = selected.length
+        ? "(?:" + selected.map(item => item.dataset.platformPattern).join("|") + ")"
+        : "(?!)";
+      const input = document.getElementById("asset_pattern");
+      input.value = pattern;
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      result.querySelector("[data-platform-feedback]").textContent =
+        `已写入正则，选择 ${selected.length} 个平台；保存来源后生效。`;
+    });
     const update = () => {
       test.hidden = kind.value !== "github_release" &&
         !(kind.value === "direct_url" && location.value.trim().endsWith("/"));

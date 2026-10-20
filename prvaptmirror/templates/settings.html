@@ -55,6 +55,10 @@
 
   <div class="card">
     <h2>运行限制</h2>
+    <label for="package_keep_versions">软件包保留版本数</label>
+    <input id="package_keep_versions" name="package_keep_versions" type="number" min="1" max="100"
+           required value="{{ values.package_keep_versions }}">
+    <p class="form-hint muted">每个包名、每种架构保留最新的指定数量版本（1–100）。保存后及后续上传、同步时自动清理旧版本。</p>
     <div class="form-grid-3">
       <div>
         <label for="max_upload_mb">单次上传上限（MB）</label>

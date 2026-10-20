@@ -92,7 +92,7 @@ def test_initial_password_blocks_delete_and_publish(client, ready, tmp_path):
     package_id = conn.execute("SELECT id FROM packages").fetchone()[0]
     before = conn.execute("SELECT count(*) FROM publish_runs").fetchone()[0]
     conn.execute("UPDATE users SET must_change_password=1")
-    for url in (f"/admin/packages/{package_id}/delete", "/admin/publish"):
+    for url in (f"/admin/packages/{package_id}/delete", "/admin/packages/delete", "/admin/publish"):
         response = client.post(url, data={"csrf_token": token, "confirm_name": "protected"},
                                follow_redirects=False)
         assert response.status_code == 303
@@ -345,6 +345,36 @@ def test_setup_snippet_no_trusted_yes(client):
     assert "trusted.gpg.d" not in text
 
 
+def test_bulk_delete_publishes_once_and_requires_csrf(client, ready, tmp_path):
+    from prvaptmirror.db import connect, list_packages
+
+    login(client)
+    token = _csrf(client.get("/admin/packages").text)
+    files = []
+    for name in ("delete-one", "delete-two", "keep-one"):
+        deb = build_deb(tmp_path / f"{name}.deb", package=name)
+        files.append(("files", (deb.name, deb.read_bytes())))
+    client.post("/admin/packages/upload", data={"csrf_token": token}, files=files)
+    conn = connect(ready)
+    rows = list_packages(conn)
+    ids = [p.id for p in rows if p.name.startswith("delete-")]
+    blobs = [ready.repo_dir / p.filename for p in rows if p.id in ids]
+    before = conn.execute("SELECT count(*) FROM publish_runs").fetchone()[0]
+    assert client.post("/admin/packages/delete", data={"package_ids": ids}).status_code == 403
+    assert len(list_packages(conn)) == 3
+    response = client.post("/admin/packages/delete", data={
+        "csrf_token": token, "package_ids": ids + ids,
+    }, follow_redirects=False)
+    assert response.headers["location"] == "/admin/packages?deleted=1"
+    assert conn.execute("SELECT count(*) FROM publish_runs").fetchone()[0] == before + 1
+    assert [p.name for p in list_packages(conn)] == ["keep-one"]
+    assert all(not blob.exists() for blob in blobs)
+    index = client.get("/apt/dists/stable/main/binary-all/Packages").text
+    assert "Package: delete-" not in index
+    assert "Package: keep-one" in index
+    conn.close()
+
+
 def test_source_configuration_ui_persists_in_database(client):
     class NoopScheduler:
         def wake(self):
@@ -435,6 +465,9 @@ def test_source_form_can_preview_github_asset_matches(client, monkeypatch):
     assert "将抓取" in response.text
     assert "正则未命中" in response.text
     assert "不是 .deb" in response.text
+    assert "发现 2 个平台" in response.text
+    assert 'data-platform-pattern="' in response.text
+    assert "按所选平台生成正则" in response.text
     assert "temporary-token" not in response.text
     conn = connect(client.app.state.base_cfg)
     assert conn.execute("SELECT count(*) FROM package_sources").fetchone()[0] == 0
@@ -581,6 +614,7 @@ def test_settings_update_runtime_values_and_republish(client):
         "max_upload_mb": "256",
         "max_upload_files": "10",
         "session_days": "14",
+        "package_keep_versions": "2",
     }
     saved = client.post(
         "/admin/settings",
@@ -590,6 +624,7 @@ def test_settings_update_runtime_values_and_republish(client):
     )
     assert saved.status_code == 303, saved.text
     assert "https://apt.example.com/apt" in client.get("/admin/setup").text
+    assert client.app.state.cfg.package_keep_versions == 2
 
     page = client.get("/admin/settings")
     values.update(
@@ -646,7 +681,7 @@ def test_settings_roll_back_when_republish_fails(client, monkeypatch):
     login(client)
     calls = 0
 
-    def fail_then_recover(cfg, conn):
+    def fail_then_recover(cfg, conn, **kwargs):
         nonlocal calls
         calls += 1
         if calls == 1:
@@ -678,6 +713,46 @@ def test_settings_roll_back_when_republish_fails(client, monkeypatch):
     assert calls == 2
     settings = client.get("/admin/settings")
     assert 'name="suite" type="text" required value="stable"' in settings.text
+
+
+def test_retention_setting_save_failure_preserves_old_versions(client, ready, tmp_path, monkeypatch):
+    from prvaptmirror.db import connect, list_packages
+    from prvaptmirror.routes import admin as admin_routes
+    from prvaptmirror.settings import app_setting_values
+
+    login(client)
+    token = _csrf(client.get("/admin/packages").text)
+    files = []
+    for version in ("1", "2"):
+        deb = build_deb(tmp_path / f"retention-{version}.deb", package="settings-retain", version=version)
+        files.append(("files", (deb.name, deb.read_bytes())))
+    client.post("/admin/packages/upload", data={"csrf_token": token}, files=files)
+    conn = connect(ready)
+    blobs = [ready.repo_dir / row.filename for row in list_packages(conn)]
+    values = app_setting_values(client.app.state.cfg)
+    values.update(csrf_token=token, package_keep_versions="1")
+    original_save = admin_routes.save_app_config
+
+    def fail_save(*args):
+        raise RuntimeError("test settings write failed")
+
+    monkeypatch.setattr(admin_routes, "save_app_config", fail_save)
+    response = client.post("/admin/settings", data=values)
+    assert response.status_code == 500
+    assert "设置已回滚" in response.text
+    assert client.app.state.cfg.package_keep_versions == 3
+    assert len(list_packages(conn, state="active")) == 2
+    assert all(blob.is_file() for blob in blobs)
+    index = client.get("/apt/dists/stable/main/binary-all/Packages").text
+    assert "Version: 1\n" in index and "Version: 2\n" in index
+
+    monkeypatch.setattr(admin_routes, "save_app_config", original_save)
+    response = client.post("/admin/settings", data=values, follow_redirects=False)
+    assert response.status_code == 303
+    assert client.app.state.cfg.package_keep_versions == 1
+    assert [row.version for row in list_packages(conn)] == ["2"]
+    assert not blobs[0].exists() and blobs[1].is_file()
+    conn.close()
 
 
 def test_startup_recovers_interrupted_settings_publish(ready):
