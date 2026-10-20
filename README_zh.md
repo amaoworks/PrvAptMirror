@@ -92,7 +92,7 @@ docker compose exec app prvaptmirror-admin reset-password --username admin
 
 ## 容器版本发布
 
-推送到 `main` 仅运行测试；推送语义化 Git Tag 才会测试、构建并发布版本镜像和 `sha-*` 镜像，同时更新 `latest`，避免同时推送分支和标签时重复构建镜像。测试和镜像发布成功后，工作流会自动创建 GitHub Release，优先使用 `.github/release-notes/<tag>.md`，没有对应文件时自动生成说明。部署默认使用 `latest`，版本标签保留用于选择特定版本或回滚。已经发布的完整版本标签不得覆盖。
+仅推送语义化 Git Tag 时自动触发发布流程：运行测试、构建并发布版本镜像和 `sha-*` 镜像，同时更新 `latest`。推送到 `main` 不触发工作流，仍可手动执行；同时推送分支和版本标签时只产生一条自动运行记录。测试和镜像发布成功后，工作流会自动创建 GitHub Release，优先使用 `.github/release-notes/<tag>.md`，没有对应文件时自动生成说明。部署默认使用 `latest`，版本标签保留用于选择特定版本或回滚。已经发布的完整版本标签不得覆盖。
 
 ## 不使用 Docker
 
