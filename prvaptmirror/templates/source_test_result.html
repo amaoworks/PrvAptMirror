@@ -3,7 +3,7 @@
     <p class="form-hint">勾选下表中需要同步的具体软件包，再生成正则并保存来源。</p>
     <button type="button" class="btn-secondary" data-apply-packages>按所选软件包生成正则</button>
     <span class="muted form-hint" data-package-feedback aria-live="polite"></span>
-    <p class="muted form-hint">标准的“包名_版本_架构.deb”会匹配该包、该架构的后续版本；其他命名按完整文件名匹配，可手动调整。未选择软件包时不匹配任何文件。</p>
+    <p class="muted form-hint">支持“包名_版本_架构.deb”和“包名-版本-平台.deb”，识别版本后自动匹配后续版本，包名和平台保持限定；无法识别版本时按完整文件名匹配。未选择软件包时不匹配任何文件。</p>
   </div>
 {% endif %}
 {% if error %}

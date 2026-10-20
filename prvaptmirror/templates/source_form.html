@@ -213,7 +213,7 @@
       const input = document.getElementById("asset_pattern");
       input.value = pattern;
       input.dispatchEvent(new Event("input", { bubbles: true }));
-      feedback.textContent = `已写入正则，选择 ${selected.length} 个软件包；保存来源后生效。`;
+      feedback.textContent = `已写入正则，选择 ${selected.length} 个软件包；保存来源后生效，重新测试可刷新匹配结果。`;
     });
     const update = () => {
       test.hidden = kind.value !== "github_release" &&

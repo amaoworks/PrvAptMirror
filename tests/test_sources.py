@@ -490,6 +490,70 @@ def test_nonstandard_package_pattern_matches_only_the_selected_filename():
     assert not re.search(pattern, "Other-" + filename)
 
 
+@pytest.mark.parametrize(
+    ("filename", "release", "future", "excluded"),
+    [
+        ("siyuan-3.8.8-linux-arm64.deb", "v3.8.8", "siyuan-4.0.0-linux-arm64.deb", "siyuan-4.0.0-linux.deb"),
+        ("siyuan-3.8.8-linux.deb", "v3.8.8", "siyuan-3.9.0-linux.deb", "siyuan-3.9.0-linux-arm64.deb"),
+        ("siyuan-3.8.8-linux.deb", "latest", "siyuan-3.9.0-linux.deb", "siyuan-3.9.0-pro-linux.deb"),
+        ("tool-2024.1-3.8.8-linux.deb", "v3.8.8", "tool-2024.1-4.0.0-linux.deb", "tool-2025.1-4.0.0-linux.deb"),
+        ("tool-v3.8.8-rc.1-linux.deb", "v3.8.8-rc.1", "tool-v4.0.0-beta.2-linux.deb", "other-v4.0.0-beta.2-linux.deb"),
+    ],
+)
+def test_hyphenated_package_patterns_generalize_only_the_version(filename, release, future, excluded):
+    import re
+
+    from prvaptmirror.source_sync import GitHubAssetPreview, GitHubSourcePreview
+
+    preview = GitHubSourcePreview("siyuan-note/siyuan", 1, (
+        GitHubAssetPreview(release, filename, 10, True, True),
+    ))
+    pattern = preview_package_patterns(preview)[filename]
+    assert re.fullmatch(pattern, filename)
+    assert re.fullmatch(pattern, future)
+    assert not re.fullmatch(pattern, excluded)
+    assert not re.fullmatch(pattern, future + ".sig")
+    assert "3\\.8\\.8" not in pattern
+
+
+def test_siyuan_generated_patterns_sync_a_new_release(ready, tmp_path):
+    from prvaptmirror.source_sync import GitHubAssetPreview, GitHubSourcePreview
+
+    preview = GitHubSourcePreview("siyuan-note/siyuan", 1, (
+        GitHubAssetPreview("v3.8.8", "siyuan-3.8.8-linux-arm64.deb", 10, True, True),
+        GitHubAssetPreview("v3.8.8", "siyuan-3.8.8-linux.deb", 10, True, True),
+    ))
+    pattern = "(?:" + "|".join(preview_package_patterns(preview).values()) + ")"
+    assert len(pattern) <= 500
+    payloads = {}
+    assets = []
+    for architecture, suffix in (("arm64", "-arm64"), ("amd64", "")):
+        filename = f"siyuan-4.0.0-linux{suffix}.deb"
+        path = f"/assets/{architecture}"
+        payloads[path] = build_deb(tmp_path / filename, package="siyuan", version="4.0.0", architecture=architecture).read_bytes()
+        assets.append({"id": architecture, "name": filename, "url": "https://api.github.com" + path})
+    for filename in ("siyuan-4.0.0-pro-linux.deb", "other-4.0.0-linux.deb", "siyuan-4.0.0-linux-armhf.deb"):
+        assets.append({"id": filename, "name": filename, "url": "https://api.github.com/unselected"})
+    requested = []
+
+    def handler(request):
+        if request.url.path == "/repos/siyuan-note/siyuan/releases":
+            return httpx.Response(200, json=[{"tag_name": "v4.0.0", "assets": assets}])
+        requested.append(request.url.path)
+        assert request.url.path in payloads
+        return httpx.Response(200, content=payloads[request.url.path])
+
+    conn = connect(ready)
+    source = create_source(ready, conn, _values(location="siyuan-note/siyuan", asset_pattern=pattern))
+    with httpx.Client(transport=httpx.MockTransport(handler)) as remote:
+        assert sync_source_once(ready, source.id, client=remote)
+    assert get_source(conn, source.id).last_status == "success"
+    packages = conn.execute("SELECT name, version, architecture FROM packages").fetchall()
+    assert {tuple(row) for row in packages} == {("siyuan", "4.0.0", "arm64"), ("siyuan", "4.0.0", "amd64")}
+    assert requested == ["/assets/arm64", "/assets/amd64"]
+    conn.close()
+
+
 def test_direct_url_uses_conditional_request_and_skips_same_content(ready, tmp_path):
     deb = build_deb(
         tmp_path / "direct_1.0-1_all.deb",

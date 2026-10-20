@@ -34,6 +34,10 @@ from prvaptmirror.storage import DiskFullError, write_incoming_stream
 FINAL_ARTIFACT_STATUSES = {"imported", "skipped", "rejected", "conflict"}
 MAX_DIRECTORY_INDEX_BYTES = 2 * 1024 * 1024
 USER_AGENT = f"PrvAptMirror/{__version__}"
+FILENAME_VERSION_PATTERN = (
+    r"[0-9]+(?:\.[0-9]+)*(?:[-~](?:alpha|beta|rc|pre|dev)[0-9.]*)?"
+    r"(?:-[0-9][0-9A-Za-z.+~]*)?(?:\+[0-9A-Za-z.]+)?"
+)
 
 
 @dataclass(frozen=True)
@@ -70,8 +74,30 @@ def preview_package_patterns(preview) -> dict[str, str]:
                 "^" + re.escape(package) + r"_[^_]+_" + re.escape(architecture) + r"\.deb$"
             )
         else:
-            # Unknown naming schemes must not accidentally select other software.
-            patterns[asset.filename] = "^" + re.escape(asset.filename) + "$"
+            # GitHub assets often use name-version-platform.deb. Prefer the
+            # release tag so numbers belonging to the package name stay fixed.
+            release = getattr(asset, "release", "").lstrip("vV")
+            version_match = None
+            if re.fullmatch(FILENAME_VERSION_PATTERN, release, re.IGNORECASE):
+                version_match = re.search(
+                    r"(?<=[_-])v?(" + re.escape(release) + r")(?=[_.-])",
+                    asset.filename, re.IGNORECASE,
+                )
+            if version_match is None:
+                candidates = list(re.finditer(
+                    r"(?<=[_-])v?(" + FILENAME_VERSION_PATTERN + r")(?=[_.-])",
+                    asset.filename, re.IGNORECASE,
+                ))
+                if len(candidates) == 1 and "." in candidates[0][1]:
+                    version_match = candidates[0]
+            if version_match is not None:
+                start, end = version_match.span(1)
+                patterns[asset.filename] = (
+                    "^" + re.escape(asset.filename[:start]) + FILENAME_VERSION_PATTERN
+                    + re.escape(asset.filename[end:]) + "$"
+                )
+            else:
+                patterns[asset.filename] = "^" + re.escape(asset.filename) + "$"
     return patterns
 
 

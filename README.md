@@ -92,7 +92,7 @@ docker compose exec app prvaptmirror-admin reset-password --username admin
 
 ## Container releases
 
-Pushing to `main` publishes `edge` and `sha-*` images. Pushing a semantic Git tag publishes versioned images and updates `latest`. After tests and image publishing succeed, the workflow creates a GitHub Release using `.github/release-notes/<tag>.md` when available, or generated notes otherwise. Deployments use `latest` by default; versioned tags remain available for selecting a specific release or rolling back. Released full-version tags must not be overwritten.
+Pushing to `main` runs tests only. Pushing a semantic Git tag runs tests, publishes versioned and `sha-*` images, and updates `latest`. This avoids building images twice when a branch and release tag are pushed together. After tests and image publishing succeed, the workflow creates a GitHub Release using `.github/release-notes/<tag>.md` when available, or generated notes otherwise. Deployments use `latest` by default; versioned tags remain available for selecting a specific release or rolling back. Released full-version tags must not be overwritten.
 
 ## Without Docker
 
