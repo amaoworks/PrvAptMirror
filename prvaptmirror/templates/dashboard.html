@@ -3,17 +3,68 @@
 {% block body %}
 <div class="page-title-row">
   <h1>仪表盘</h1>
-  <form method="post" action="/admin/publish" style="margin:0;">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <button type="submit">重建索引</button>
-  </form>
 </div>
 
-{% if request.query_params.get("err") == "publish" %}
-  <p class="err flash">索引发布失败。系统会自动重试，请检查下方的错误信息。</p>
-{% elif request.query_params.get("ok") %}
-  <p class="ok flash">索引已重建并发布。</p>
+{% set publish_failed = last and last["status"] == "failed" %}
+{% set publishing = last and last["status"] == "running" %}
+{% set current = has_index and last and last["status"] == "success" and not pending %}
+{% if request.query_params.get("ok") and current %}
+  <p class="ok flash page-notice" role="status">索引已重建并发布。</p>
 {% endif %}
+
+<section class="card publish-overview" aria-labelledby="publish-heading"
+         data-index-status="{{ 'failed' if publish_failed else 'current' if current else 'attention' }}">
+  <div class="section-heading">
+    <div>
+      <h2 id="publish-heading">APT 索引</h2>
+      {% if publish_failed %}
+        <span class="badge badge-err">上次发布失败</span>
+      {% elif publishing %}
+        <span class="badge badge-warn">发布中</span>
+      {% elif pending %}
+        <span class="badge badge-warn">有待发布改动</span>
+      {% elif current %}
+        <span class="badge badge-ok">已是最新</span>
+      {% else %}
+        <span class="badge badge-mute">尚未发布</span>
+      {% endif %}
+    </div>
+    <form method="post" action="/admin/publish">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button type="submit" {% if current %}class="btn-secondary"{% endif %} {% if publishing %}disabled{% endif %}>重建索引</button>
+    </form>
+  </div>
+  {% if publish_failed %}
+    <p class="err flash" role="alert">
+      索引发布失败。{% if has_index %}APT 客户端暂时只能获取上次成功发布的索引。{% else %}APT 客户端暂时没有可用的索引。{% endif %}
+      系统会自动重试，也可以手动重建。
+      {% if last["error"] %}<br>{{ last["error"] }}{% endif %}
+    </p>
+  {% elif pending or publishing %}
+    <p class="muted">{% if has_index %}APT 客户端仍在使用上次发布的索引。{% else %}首次发布完成后，APT 客户端即可接入。{% endif %}</p>
+  {% elif current %}
+    <p class="muted">APT 客户端可以获取当前已发布的软件包。</p>
+  {% else %}
+    <p class="muted">重建并签名索引后，APT 客户端即可接入。</p>
+  {% endif %}
+  {% if last %}
+    {% set publish_time = last["finished_at"] or last["started_at"] %}
+    <p class="form-hint">最近一次发布尝试 <time datetime="{{ publish_time }}">{{ publish_time }}</time>{% if last["duration_ms"] is not none %} · {{ last["duration_ms"] }} ms{% endif %}</p>
+  {% endif %}
+  {% if counts.missing or counts.pending_delete or skipped %}
+    <ul class="maintenance-list">
+      {% if counts.missing %}
+        <li><a href="/admin/packages?state=missing">{{ counts.missing }} 个软件包文件缺失</a>，重新上传可修复。</li>
+      {% endif %}
+      {% if counts.pending_delete %}
+        <li><a href="/admin/packages?state=pending_delete">{{ counts.pending_delete }} 个软件包等待删除</a>。</li>
+      {% endif %}
+      {% for architecture, count in skipped.items() %}
+        <li><a href="/admin/packages?arch={{ architecture | urlencode }}&amp;state=active">{{ count }} 个 {{ architecture }} 软件包</a>因架构设置跳过。</li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+</section>
 
 <div class="stat-grid">
   <div class="stat-card">
@@ -21,11 +72,11 @@
     <div class="stat-val">{{ counts.total }}</div>
   </div>
   <div class="stat-card">
-    <div class="stat-label">有效可用包</div>
-    <div class="stat-val ok">{{ counts.active }}</div>
+    <div class="stat-label">本地有效包</div>
+    <div class="stat-val">{{ counts.active }}</div>
   </div>
   <div class="stat-card">
-    <div class="stat-label">仓库占用体积</div>
+    <div class="stat-label">有效包文件体积</div>
     <div class="stat-val">{{ counts.bytes | humansize }}</div>
   </div>
   <div class="stat-card">
@@ -34,71 +85,15 @@
   </div>
 </div>
 
-<div class="dashboard-layout">
-  <div class="card">
-    <h2>仓库状态与签名</h2>
-    <div class="panel">
-      <p class="panel-title">GPG 密钥指纹</p>
-      <div class="kv">
-        <span class="k">密钥指纹：</span>
-        <span class="v"><code>{{ fingerprint or "（尚未生成）" }}</code></span>
-      </div>
-    </div>
-    <div class="panel">
-      <p class="panel-title">发布与同步状态</p>
-      <div class="kv">
-        <span class="k">待发布改动：</span>
-        <span class="v">
-          {% if dirty == "1" %}
-            <span class="badge badge-warn">需要重建</span>
-          {% else %}
-            <span class="badge badge-ok">已是最新</span>
-          {% endif %}
-        </span>
-      </div>
-      <div class="kv">
-        <span class="k">上次发布：</span>
-        <span class="v">
-          {% if last %}
-            {{ last["status"] | status_label }} · {{ last["finished_at"] or last["started_at"] }}
-            {% if last["duration_ms"] is not none %}（{{ last["duration_ms"] }} ms）{% endif %}
-            {% if last["error"] %}<p class="err">{{ last["error"] }}</p>{% endif %}
-          {% else %}
-            <span class="muted">（尚无记录）</span>
-          {% endif %}
-        </span>
-      </div>
-    </div>
+<section class="card" aria-labelledby="repository-heading">
+  <h2 id="repository-heading">仓库信息</h2>
+  <div class="kv">
+    <span class="k">GPG 密钥指纹</span>
+    <span class="v"><code>{{ fingerprint or "（尚未生成）" }}</code></span>
   </div>
-
-  <div class="card">
-    <h2>仓库维护与提醒</h2>
-    {% if counts.missing %}
-      <div class="flash err" style="margin-top:0;margin-bottom:0.85rem;">
-        有 <strong>{{ counts.missing }}</strong> 个包文件缺失，请重新上传以修复。
-      </div>
-    {% endif %}
-    {% if counts.pending_delete %}
-      <div class="flash" style="margin-top:0;margin-bottom:0.85rem;background:#eee;color:var(--muted);">
-        有 <strong>{{ counts.pending_delete }}</strong> 个包正在等待删除。
-      </div>
-    {% endif %}
-    {% if skipped %}
-      <div class="flash err" style="margin-top:0;margin-bottom:0.85rem;">
-        以下软件包架构不在当前设置中，已跳过：
-        {% for p in skipped %}{{ p.name }} {{ p.version }} {{ p.architecture }}{% if not loop.last %}、{% endif %}{% endfor %}
-      </div>
-    {% endif %}
-    {% if not counts.missing and not counts.pending_delete and not skipped %}
-      <p class="muted" style="margin-top:0;">仓库状态健康，各项元数据完整正常。</p>
-    {% endif %}
-    <p class="form-hint" style="margin-top:0.75rem;">
-      当上传新包、删除包或修改仓库 Suite / Codename 后，系统会自动或可在此手动触发 APT 仓库索引的重建与签名。
-    </p>
-    <div style="margin-top:1.25rem;display:flex;gap:0.75rem;flex-wrap:wrap;">
-      <a class="btn btn-secondary" href="/admin/packages">浏览软件包</a>
-      <a class="btn btn-secondary" href="/admin/setup">客户端配置向导</a>
-    </div>
+  <div class="toolbar section-actions">
+    <a class="btn btn-secondary" href="/admin/packages">浏览软件包</a>
+    <a class="btn btn-secondary" href="/admin/setup">客户端接入</a>
   </div>
-</div>
+</section>
 {% endblock %}

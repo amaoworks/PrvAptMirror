@@ -5,22 +5,22 @@
   <h1>设置</h1>
 </div>
 
-{% if saved %}<p class="ok flash">设置已保存。</p>{% endif %}
-{% if error %}<p class="err flash">{{ error }}</p>{% endif %}
+{% if saved %}<p class="ok flash page-notice" role="status">设置已保存。</p>{% endif %}
+{% if error %}<p class="err flash page-notice" role="alert">{{ error }}</p>{% endif %}
 
 <form class="settings-form" method="post" action="/admin/settings">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 
-  <div class="card">
-    <h2>访问地址</h2>
+  <section class="card" aria-labelledby="settings-url-heading">
+    <h2 id="settings-url-heading">访问地址</h2>
     <label for="public_url">公开 URL</label>
     <input id="public_url" name="public_url" type="text" required
            value="{{ values.public_url }}" placeholder="https://apt.example.com">
     <p class="form-hint muted">用于生成客户端接入命令。</p>
-  </div>
+  </section>
 
-  <div class="card">
-    <h2>APT 仓库</h2>
+  <section class="card" aria-labelledby="settings-repo-heading">
+    <h2 id="settings-repo-heading">APT 仓库</h2>
     <div class="form-grid-3">
       <div>
         <label for="suite">Suite</label>
@@ -39,7 +39,7 @@
     <label for="architectures">架构</label>
     <input id="architectures" name="architectures" type="text" required
            value="{{ values.architectures }}" placeholder="amd64,arm64,all">
-    <p class="form-hint muted">英文逗号分隔；移除后不再进入索引。</p>
+    <p class="form-hint muted">英文逗号分隔。该列表限制新包上传，已保存的 <code>all</code> 包会进入各架构索引。</p>
 
     <div class="form-grid-2">
       <div>
@@ -51,10 +51,10 @@
         <input id="label" name="label" type="text" required value="{{ values.label }}">
       </div>
     </div>
-  </div>
+  </section>
 
-  <div class="card">
-    <h2>运行限制</h2>
+  <section class="card" aria-labelledby="settings-limits-heading">
+    <h2 id="settings-limits-heading">运行限制</h2>
     <label for="package_keep_versions">软件包保留版本数</label>
     <input id="package_keep_versions" name="package_keep_versions" type="number" min="1" max="100"
            required value="{{ values.package_keep_versions }}">
@@ -76,15 +76,16 @@
                required value="{{ values.session_days }}">
       </div>
     </div>
-  </div>
+  </section>
 
-  <div class="card">
+  <section class="card" aria-label="保存设置">
     <label class="checkbox-label">
       <input name="confirm_repository_change" type="checkbox" value="yes">
       <span>修改仓库元数据后立即重建索引。</span>
     </label>
-    <button type="submit" style="margin-top: 0.75rem;">保存设置</button>
-  </div>
+    <div class="section-actions">
+      <button type="submit">保存设置</button>
+    </div>
+  </section>
 </form>
 {% endblock %}
-

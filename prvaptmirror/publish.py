@@ -276,6 +276,13 @@ def upload_commit(
         if placed:
             set_setting(conn, "publish_dirty", "1")
             pub = publish_unlocked(cfg, conn)
+            if pub.ok:
+                skipped_ids = {row.id for row in pub.skipped or ()}
+                for result in results:
+                    if result["ok"]:
+                        row = get_package(conn, result["id"])
+                        result["retained"] = row is not None and row.state == "active"
+                        result["indexed"] = result["retained"] and result["id"] not in skipped_ids
             return results, pub
         return results, None
 

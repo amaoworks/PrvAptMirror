@@ -1,44 +1,47 @@
 {% extends "base.html" %}
 {% block title %}客户端接入 · PrvAptMirror{% endblock %}
+{% macro command_box(path, command) %}
+<div class="code-box">
+  <div class="code-box-header">
+    <span>{{ path }}</span>
+    <button type="button" class="btn-copy" data-copy-command>复制命令</button>
+  </div>
+  <pre>{{ command }}</pre>
+</div>
+<p class="copy-feedback muted" role="status"></p>
+{% endmacro %}
 {% block body %}
 <div class="page-title-row">
   <h1>客户端接入</h1>
 </div>
 
-<div class="card">
-  <p style="margin-top:0;">在 Debian/Ubuntu 客户端配置此 APT 源，并使用 <code>Signed-By</code> 绑定仓库公钥。</p>
+<section class="card" aria-labelledby="deb822-title">
+  <h2 id="deb822-title">添加 APT 软件源</h2>
+  <p>在 Debian 12+ 或 Ubuntu 22.04+ 客户端运行以下命令。命令会下载仓库公钥，写入 deb822 源文件，然后运行 <code>apt update</code>。</p>
+  {{ command_box("/etc/apt/sources.list.d/prvaptmirror.sources", deb822) }}
 
-  <div class="panel" style="margin: 1rem 0 1.5rem;">
-    <p class="panel-title">路径说明</p>
-    <div class="kv">
-      <span class="k">仓库公钥：</span>
-      <span class="v">从本服务 <code>{{ cfg.apt_base() }}/pubkey.asc</code> 下载，保存到客户端 <code>/etc/apt/keyrings/prvaptmirror.asc</code>（单行格式另需转换成 <code>prvaptmirror.gpg</code>）。</span>
+  <details class="setup-details">
+    <summary>源文件与公钥位置</summary>
+    <div class="panel">
+      <div class="kv">
+        <span class="k">仓库公钥</span>
+        <span class="v"><code>{{ cfg.apt_base() }}/pubkey.asc</code></span>
+      </div>
+      <div class="kv">
+        <span class="k">客户端公钥</span>
+        <span class="v"><code>/etc/apt/keyrings/prvaptmirror.asc</code></span>
+      </div>
+      <div class="kv">
+        <span class="k">客户端源文件</span>
+        <span class="v"><code>/etc/apt/sources.list.d/prvaptmirror.sources</code>，通过 <code>Signed-By</code> 绑定公钥。</span>
+      </div>
     </div>
-    <div class="kv">
-      <span class="k">源配置文件：</span>
-      <span class="v">推荐写入 <code>/etc/apt/sources.list.d/prvaptmirror.sources</code>；兼容格式写入 <code>/etc/apt/sources.list.d/prvaptmirror.list</code>。勿直接改动 <code>/etc/apt/sources.list</code> 本体（除非你明确需要）。</span>
-    </div>
-  </div>
+  </details>
+</section>
 
-  <h2>推荐方式：deb822 源文件</h2>
-  <p class="muted">适用于 Debian 12+、Ubuntu 22.04+。</p>
-  <div class="code-box">
-    <div class="code-box-header">
-      <span>/etc/apt/sources.list.d/prvaptmirror.sources</span>
-      <button type="button" class="btn-copy" onclick="navigator.clipboard.writeText(this.closest('.code-box').querySelector('pre').innerText).then(() => { this.innerText = '已复制！'; setTimeout(() => this.innerText = '复制', 2000); })">复制</button>
-    </div>
-    <pre>{{ deb822 }}</pre>
-  </div>
-
-  <h2 style="margin-top: 1.5rem;">兼容方式：sources.list 单行格式</h2>
-  <p class="muted">用于传统 <code>sources.list</code> 单行格式。</p>
-  <div class="code-box">
-    <div class="code-box-header">
-      <span>/etc/apt/sources.list.d/prvaptmirror.list</span>
-      <button type="button" class="btn-copy" onclick="navigator.clipboard.writeText(this.closest('.code-box').querySelector('pre').innerText).then(() => { this.innerText = '已复制！'; setTimeout(() => this.innerText = '复制', 2000); })">复制</button>
-    </div>
-    <pre>{{ oneline }}</pre>
-  </div>
-</div>
+<section class="card" aria-labelledby="oneline-title">
+  <h2 id="oneline-title">兼容传统单行格式</h2>
+  <p class="muted">如果客户端使用 <code>sources.list</code> 单行格式，请使用下面这组命令。</p>
+  {{ command_box("/etc/apt/sources.list.d/prvaptmirror.list", oneline) }}
+</section>
 {% endblock %}
-

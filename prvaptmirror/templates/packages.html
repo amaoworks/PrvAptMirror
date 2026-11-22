@@ -5,101 +5,148 @@
   <h1>软件包</h1>
 </div>
 
-<div class="card" style="padding: 1.1rem 1.4rem;">
-  <form method="post" action="/admin/packages/upload" enctype="multipart/form-data" class="form-block">
+{% set error = upload_error or request.query_params.get("err") %}
+{% if error == "upload_publish" %}
+  <p class="err flash page-notice" role="alert">软件包已保存，但仓库索引发布失败，APT 暂时无法获取本次更新。系统会自动重试，也可前往<a href="/admin/">仪表盘</a>重建索引。</p>
+{% elif error == "publish" %}
+  <p class="err flash page-notice" role="alert">仓库索引发布失败，系统会自动重试，也可前往<a href="/admin/">仪表盘</a>重建索引。</p>
+{% elif error %}
+  {% set errors = {
+    "duplicate": "所选软件包已经存在。",
+    "nofile": "请选择要上传的 .deb 文件。",
+    "notdeb": "只能上传 .deb 文件，请检查选择后重试。",
+    "too_many": "选择的文件数量超过单次限制，请分批上传。"
+  } %}
+  <p class="err flash page-notice" role="alert">{{ errors.get(error, error) }}</p>
+{% elif request.query_params.get("ok") %}
+  <p class="ok flash page-notice" role="status">上传完成，索引已发布。</p>
+{% elif request.query_params.get("deleted") %}
+  <p class="ok flash page-notice" role="status">已删除并重建索引。</p>
+{% endif %}
+
+{% if upload_results %}
+  <section class="card" aria-labelledby="upload-results-heading">
+    <h2 id="upload-results-heading">上传结果</h2>
+    <ul class="upload-results">
+      {% for result in upload_results %}
+        <li>
+          <span><strong>{{ result.name }}</strong> <code>{{ result.version }}</code> <span class="muted">{{ result.architecture }}</span></span>
+          {% if not result.ok %}
+            <span class="badge badge-warn">版本已存在，已跳过</span>
+          {% elif error == "upload_publish" %}
+            <span class="badge badge-warn">已保存，等待发布</span>
+          {% elif result.indexed %}
+            <span class="badge badge-ok">已发布</span>
+          {% elif result.retained %}
+            <span class="badge badge-warn">已保存，未进入索引</span>
+          {% else %}
+            <span class="badge badge-mute">旧版本，已按保留规则清理</span>
+          {% endif %}
+        </li>
+      {% endfor %}
+    </ul>
+  </section>
+{% endif %}
+
+<section class="card" aria-labelledby="upload-heading">
+  <h2 id="upload-heading">上传软件包</h2>
+  <form method="post" action="/admin/packages/upload" enctype="multipart/form-data" data-upload-form>
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <label style="margin-top:0;">上传 .deb 软件包 <span class="form-hint" style="display:inline;margin-left:0.5rem;">（单次最多 {{ cfg.max_upload_files }} 个文件，总计 ≤ {{ cfg.max_upload_mb }} MB）</span></label>
-    <div class="toolbar" style="margin-top: 0.5rem;">
-      <input style="max-width: 440px;" type="file" name="files" accept=".deb" multiple required>
+    <label for="package-files">选择 .deb 文件</label>
+    <div class="toolbar upload-toolbar">
+      <input id="package-files" type="file" name="files" accept=".deb" aria-describedby="upload-limits" multiple required>
       <button type="submit">上传并发布</button>
     </div>
+    <p class="form-hint" id="upload-limits">单次最多 {{ cfg.max_upload_files }} 个文件，总计不超过 {{ cfg.max_upload_mb }} MB。</p>
   </form>
-  {% if request.query_params.get("ok") %}<p class="ok flash">上传已提交。</p>{% endif %}
-  {% if request.query_params.get("deleted") %}<p class="ok flash">已删除并重建索引。</p>{% endif %}
-  {% if request.query_params.get("err") == "upload_publish" %}
-    <p class="err flash">软件包已保存，但仓库索引发布失败，APT 暂时无法获取本次更新。系统会自动重试，也可前往<a href="/admin/">仪表盘</a>重建索引。</p>
-  {% elif request.query_params.get("err") == "publish" %}
-    <p class="err flash">仓库索引发布失败，系统会自动重试，也可前往<a href="/admin/">仪表盘</a>重建索引。</p>
-  {% elif request.query_params.get("err") %}<p class="err flash">{{ request.query_params.get("err") }}</p>{% endif %}
-</div>
+</section>
 
-<div class="card">
-  <form method="get" action="/admin/packages" class="toolbar form-block" style="margin-bottom: 1.25rem;">
-    <input style="max-width: 320px;" type="search" name="q" value="{{ q }}" placeholder="搜索包名 / 版本">
-    <select name="arch" style="width: 140px; max-width: 140px;">
+<section class="card" aria-labelledby="package-list-heading">
+  <h2 id="package-list-heading">软件包列表</h2>
+  <form method="get" action="/admin/packages" class="toolbar package-filters">
+    <label class="sr-only" for="package-search">搜索包名或版本</label>
+    <input id="package-search" type="search" name="q" value="{{ q }}" placeholder="搜索包名 / 版本">
+    <label class="sr-only" for="package-arch">架构</label>
+    <select id="package-arch" name="arch">
       <option value="">全部架构</option>
-      {% for a in cfg.architectures %}
+      {% for a in architectures %}
         <option value="{{ a }}" {% if arch == a %}selected{% endif %}>{{ a }}</option>
       {% endfor %}
+      {% if arch and arch not in architectures %}<option value="{{ arch }}" selected>{{ arch }}</option>{% endif %}
     </select>
-    <button type="submit">筛选</button>
-    {% if q or arch %}
-      <a href="/admin/packages" class="btn btn-secondary" style="font-size:0.85rem;height:2.35rem;">重置</a>
+    <label class="sr-only" for="package-state">软件包状态</label>
+    <select id="package-state" name="state">
+      <option value="">全部状态</option>
+      {% for value in ("active", "missing", "pending_delete") %}
+        <option value="{{ value }}" {% if state == value %}selected{% endif %}>{{ value | status_label }}</option>
+      {% endfor %}
+    </select>
+    <button type="submit" class="btn-secondary">筛选</button>
+    {% if q or arch or state %}
+      <a href="/admin/packages" class="reset-filters">重置</a>
     {% endif %}
   </form>
 
-  <form id="package-bulk-delete" method="post" action="/admin/packages/delete"
-        data-confirm="确认删除所选的 {count} 个软件包？" data-confirm-count="package_ids">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <div class="toolbar" style="margin-bottom: 0.75rem;">
-      <button id="delete-selected" class="danger" type="submit" disabled>删除所选</button>
-      <span id="selected-count" class="muted">已选择 0 个</span>
+  {% if packages %}
+    <form id="package-bulk-delete" method="post" action="/admin/packages/delete"
+          data-confirm="确认删除所选的 {count} 个软件包？删除后将重建 APT 索引。" data-confirm-count="package_ids">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="q" value="{{ q }}">
+      <input type="hidden" name="arch" value="{{ arch }}">
+      <input type="hidden" name="state" value="{{ state }}">
+      <input type="hidden" name="page" value="{{ page }}">
+      <div class="toolbar bulk-actions">
+        <span id="selected-count" class="muted" role="status">已选择 0 个</span>
+        <button id="delete-selected" class="btn-danger-outline" type="submit" disabled>删除所选</button>
+      </div>
+      <div class="table-responsive">
+        <table class="package-table">
+          <thead>
+            <tr>
+              <th scope="col"><input id="select-all-packages" type="checkbox" aria-label="全选当前页"></th>
+              <th scope="col">软件包名称</th>
+              <th scope="col" class="wide-column">版本</th>
+              <th scope="col" class="wide-column">架构</th>
+              <th scope="col">状态</th>
+              <th scope="col" class="wide-column numeric">大小</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for p in packages %}
+              <tr>
+                <td><input name="package_ids" type="checkbox" value="{{ p.id }}" aria-label="选择 {{ p.name }} {{ p.version }} {{ p.architecture }}"></td>
+                <td>
+                  <a href="/admin/packages/{{ p.id }}" class="table-link">{{ p.name }}</a>
+                  <span class="compact-package-meta muted"><code>{{ p.version }}</code> · {{ p.architecture }}</span>
+                </td>
+                <td class="wide-column"><code>{{ p.version }}</code></td>
+                <td class="wide-column"><span class="badge badge-mute">{{ p.architecture }}</span></td>
+                <td>
+                  <span class="badge {% if p.state == 'active' %}badge-ok{% elif p.state == 'missing' %}badge-err{% else %}badge-warn{% endif %}">
+                    {{ p.state | status_label }}
+                  </span>
+                  {% if p.state == "missing" %}<div class="form-hint">重新上传可修复</div>{% endif %}
+                </td>
+                <td class="wide-column numeric">{{ p.size | humansize }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </form>
+    <div class="pagination">
+      <p class="muted">共 {{ total }} 个软件包{% if pages > 1 %} · 第 {{ page }} / {{ pages }} 页{% endif %}</p>
+      {% if pages > 1 %}
+        <nav aria-label="软件包分页" class="toolbar">
+          {% if page > 1 %}<a class="btn btn-secondary" href="{{ page_prefix }}page={{ page - 1 }}">上一页</a>{% endif %}
+          {% if page < pages %}<a class="btn btn-secondary" href="{{ page_prefix }}page={{ page + 1 }}">下一页</a>{% endif %}
+        </nav>
+      {% endif %}
     </div>
-  <div class="table-responsive">
-    <table>
-      <thead>
-        <tr>
-          <th><input id="select-all-packages" type="checkbox" aria-label="全选当前列表"></th>
-          <th style="width: 32%;">软件包名称</th>
-          <th style="width: 26%;">版本</th>
-          <th style="width: 14%;">架构</th>
-          <th style="width: 16%;">状态</th>
-          <th style="width: 12%; text-align: right;">大小</th>
-        </tr>
-      </thead>
-      <tbody>
-      {% for p in packages %}
-        <tr>
-          <td><input name="package_ids" type="checkbox" value="{{ p.id }}" aria-label="选择 {{ p.name }} {{ p.version }} {{ p.architecture }}"></td>
-          <td><a href="/admin/packages/{{ p.id }}" style="font-weight: 500; text-decoration: none; color: var(--acc);">{{ p.name }}</a></td>
-          <td><code>{{ p.version }}</code></td>
-          <td><span class="badge badge-mute">{{ p.architecture }}</span></td>
-          <td>
-            <span class="badge {% if p.state == 'active' %}badge-ok{% elif p.state == 'missing' %}badge-err{% else %}badge-mute{% endif %}">
-              {{ p.state | status_label }}
-            </span>
-            {% if p.state == "missing" %}
-              <div class="err" style="font-size:0.8rem; margin-top:0.2rem;">（重新上传以修复）</div>
-            {% endif %}
-          </td>
-          <td style="text-align: right; font-family: 'IBM Plex Mono', monospace; font-size: 0.88rem;">{{ p.size | humansize }}</td>
-        </tr>
-      {% else %}
-        <tr><td colspan="6" class="muted" style="text-align:center; padding: 2.5rem 1rem;">暂无软件包。</td></tr>
-      {% endfor %}
-      </tbody>
-    </table>
-  </div>
-  </form>
-</div>
-<script>
-  (() => {
-    const form = document.getElementById("package-bulk-delete");
-    const all = document.getElementById("select-all-packages");
-    const items = Array.from(form.querySelectorAll('input[name="package_ids"]'));
-    const update = () => {
-      const count = items.filter(item => item.checked).length;
-      document.getElementById("delete-selected").disabled = count === 0;
-      document.getElementById("selected-count").textContent = `已选择 ${count} 个`;
-      all.checked = items.length > 0 && count === items.length;
-      all.indeterminate = count > 0 && count < items.length;
-    };
-    all.addEventListener("change", () => {
-      items.forEach(item => { item.checked = all.checked; });
-      update();
-    });
-    items.forEach(item => item.addEventListener("change", update));
-    update();
-  })();
-</script>
+  {% elif q or arch or state %}
+    <p class="empty-state">没有符合当前筛选条件的软件包。<a href="/admin/packages">清除筛选</a></p>
+  {% else %}
+    <p class="empty-state">暂无软件包。上传 .deb 文件，或<a href="/admin/sources/new">添加自动同步来源</a>。</p>
+  {% endif %}
+</section>
 {% endblock %}

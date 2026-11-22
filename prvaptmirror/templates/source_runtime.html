@@ -1,0 +1,109 @@
+{% set syncing = source.last_status == "running" or (source.enabled and source.last_status == "queued") %}
+<div id="source-runtime"{% if syncing %}
+     hx-get="/admin/sources/{{ source.id }}/runtime" hx-trigger="every 2s"
+     hx-swap="outerHTML" hx-sync="this:drop"{% endif %}>
+<section class="card" aria-labelledby="source-status-heading">
+  <h2 id="source-status-heading">运行状态</h2>
+  {% if sync_notice == "queued" or request.query_params.get("queued") %}
+    <p class="ok flash" role="status">已加入同步队列。</p>
+  {% elif sync_notice == "unavailable" or request.query_params.get("err") == "disabled" %}
+    <p class="err flash" role="alert">来源已停用或正在同步。</p>
+  {% endif %}
+  <p class="err flash" role="alert" data-sync-feedback hidden>无法更新同步状态，请刷新页面查看最新结果。</p>
+  <div class="kv">
+    <span class="k">状态</span>
+    <span class="v" role="status">
+      {% if source.last_status == "running" %}
+        <span class="badge badge-warn">同步中</span>
+      {% elif not source.enabled %}
+        <span class="badge badge-mute">已停用</span>
+      {% elif source.last_status == "queued" %}
+        <span class="badge badge-warn">等待同步</span>
+      {% else %}
+        <span class="badge {{ 'badge-ok' if source.last_status == 'success' else 'badge-err' if source.last_status == 'error' else 'badge-mute' }}">{{ source.last_status | status_label }}</span>
+      {% endif %}
+    </span>
+  </div>
+  <div class="kv"><span class="k">上次检查</span><span class="v">{{ source.last_checked_at or "—" }}</span></div>
+  <div class="kv"><span class="k">下次检查</span><span class="v">{{ source.next_check_at if source.enabled else "—" }}</span></div>
+  {% if source.last_error and source.last_status == "error" %}<p class="err flash" role="alert">{{ source.last_error }}</p>{% endif %}
+  <div class="toolbar section-actions">
+    <form method="post" action="/admin/sources/{{ source.id }}/sync"
+          hx-post="/admin/sources/{{ source.id }}/sync" hx-target="#source-runtime"
+          hx-swap="outerHTML" hx-sync="#source-runtime:replace" hx-disabled-elt="find button">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button type="submit" {% if not source.enabled or syncing %}disabled{% endif %}>立即同步</button>
+    </form>
+    <form method="post" action="/admin/sources/{{ source.id }}/delete" data-confirm="删除此来源？已导入的软件包不会删除。">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button class="btn-danger-outline" type="submit" {% if source.last_status == "running" %}disabled{% endif %}>删除来源</button>
+    </form>
+  </div>
+</section>
+
+<section class="card" aria-labelledby="source-history-heading">
+  <h2 id="source-history-heading">最近同步</h2>
+  <div class="table-responsive">
+    <table class="runs-table">
+      <thead>
+        <tr>
+          <th scope="col">开始时间</th>
+          <th scope="col">状态</th>
+          <th scope="col" class="numeric">发现</th>
+          <th scope="col" class="numeric">下载</th>
+          <th scope="col" class="numeric">导入</th>
+          <th scope="col" class="numeric">跳过</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for run in runs %}
+        <tr>
+          <td>{{ run["started_at"] }}</td>
+          <td>
+            {{ run["status"] | status_label }}
+            {% if run["error"] %}<div class="cell-error err">{{ run["error"] }}</div>{% endif %}
+          </td>
+          <td class="numeric">{{ run["discovered"] }}</td>
+          <td class="numeric">{{ run["downloaded"] }}</td>
+          <td class="numeric">{{ run["imported"] }}</td>
+          <td class="numeric">{{ run["skipped"] }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="6" class="empty-state-cell muted">尚无同步记录。</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="card" aria-labelledby="source-files-heading">
+  <h2 id="source-files-heading">最近发现的文件</h2>
+  <div class="table-responsive">
+    <table class="artifacts-table">
+      <thead>
+        <tr>
+          <th scope="col">文件</th>
+          <th scope="col">状态</th>
+          <th scope="col" class="numeric">大小</th>
+          <th scope="col">完成时间</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for item in artifacts %}
+        <tr>
+          <td><code>{{ item["filename"] }}</code></td>
+          <td>
+            {{ item["status"] | status_label }}
+            {% if item["error"] %}<div class="cell-error err">{{ item["error"] }}</div>{% endif %}
+          </td>
+          <td class="numeric">{{ item["size"] | humansize if item["size"] is not none else "—" }}</td>
+          <td class="muted">{{ item["finished_at"] or "—" }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="4" class="empty-state-cell muted">尚未发现文件。</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+</div>

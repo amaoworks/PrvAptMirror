@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
+from functools import lru_cache
 from pathlib import Path
 from typing import Annotated
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 import httpx
 from fastapi import APIRouter, Depends, Form, Request
@@ -40,13 +42,16 @@ from prvaptmirror.db import (
     get_package,
     get_setting,
     last_publish_row,
-    list_packages,
+    package_architectures,
+    package_inventory,
+    package_page,
     set_setting,
     transaction,
 )
 from prvaptmirror.debparse import DebParseError, parse_deb
 from prvaptmirror.events import emit
-from prvaptmirror.models import User
+from prvaptmirror.indexer import package_index_architectures
+from prvaptmirror.models import SourceRow, User
 from prvaptmirror.publish import (
     delete_commit,
     delete_many_commit,
@@ -85,11 +90,32 @@ from prvaptmirror.settings import (
 from prvaptmirror.source_sync import preview_github_source, preview_http_directory, preview_package_patterns
 
 TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
+STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
 
+@lru_cache(maxsize=16)
+def _static_version(filename: str) -> str:
+    path = STATIC_DIR / filename
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()[:8]
+    except OSError:
+        return "0"
+
+
+templates.env.globals["static_v"] = _static_version
+
+
+def _parse_page(raw: str | int | None) -> int:
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return 1
+    return max(1, value)
+
+
 def humansize(num: object) -> str:
-    """Binary units starting at MB (never B/KB)."""
+    """Format byte counts without rounding small nonempty files to zero."""
     try:
         n = int(num or 0)
     except (TypeError, ValueError):
@@ -103,7 +129,11 @@ def humansize(num: object) -> str:
         return f"{n / tb:.2f} TB"
     if n >= gb:
         return f"{n / gb:.2f} GB"
-    return f"{n / mb:.2f} MB"
+    if n >= mb:
+        return f"{n / mb:.2f} MB"
+    if n >= 1024:
+        return f"{n / 1024:.2f} KB"
+    return f"{n} B"
 
 
 templates.env.filters["humansize"] = humansize
@@ -345,20 +375,28 @@ def dashboard(request: Request):
     cfg = _cfg(request)
     conn = connect(cfg)
     try:
-        packages = list_packages(conn)
+        conn.execute("BEGIN")
+        inventory = package_inventory(conn)
         last = last_publish_row(conn)
         fpr = get_setting(conn, "gpg_fingerprint") or ""
-        dirty = get_setting(conn, "publish_dirty", "0")
+        pending = (
+            get_setting(conn, "publish_dirty", "0") == "1"
+            or get_setting(conn, SETTINGS_PENDING_KEY, "0") == "1"
+        )
     finally:
         conn.close()
-    skipped = [p for p in packages if p.architecture not in cfg.architectures]
-    counts = {
-        "total": len(packages),
-        "active": sum(1 for p in packages if p.state == "active"),
-        "pending_delete": sum(1 for p in packages if p.state == "pending_delete"),
-        "missing": sum(1 for p in packages if p.state == "missing"),
-        "bytes": sum(p.size for p in packages if p.state == "active"),
-    }
+    counts = {"total": 0, "active": 0, "pending_delete": 0, "missing": 0, "bytes": 0}
+    skipped = {}
+    for row in inventory:
+        state, arch, count = row["state"], row["architecture"], row["count"]
+        counts["total"] += count
+        if state in ("active", "pending_delete", "missing"):
+            counts[state] += count
+        if state == "active":
+            counts["bytes"] += row["bytes"]
+            if not package_index_architectures(arch, cfg.architectures):
+                skipped[arch] = count
+    has_index = bool(fpr) and (cfg.dists_dir / cfg.suite / "InRelease").is_file()
     disk = os.statvfs(cfg.data_dir)
     free = disk.f_bavail * disk.f_frsize
     response = templates.TemplateResponse(
@@ -369,14 +407,13 @@ def dashboard(request: Request):
             user,
             _csrf_expected(request, user),
             {
-                "packages": packages,
                 "counts": counts,
                 "skipped": skipped,
                 "last": last,
                 "fingerprint": fpr,
-                "dirty": dirty,
+                "pending": pending,
+                "has_index": has_index,
                 "disk_free": free,
-                "cfg": cfg,
             },
         ),
     )
@@ -435,7 +472,7 @@ def _settings_response(
     return response
 
 
-def _source_values(source=None) -> dict[str, str]:
+def _source_values(source: SourceRow | None = None) -> dict[str, str]:
     if source is None:
         return {
             "name": "",
@@ -464,17 +501,11 @@ def _source_form_response(
     user: User,
     values: dict[str, str],
     *,
-    source=None,
+    source: SourceRow | None = None,
     error: str | None = None,
     status_code: int = 200,
 ):
-    cfg = _cfg(request)
-    conn = connect(cfg)
-    try:
-        runs = source_runs(conn, source.id) if source else []
-        artifacts = source_artifacts(conn, source.id) if source else []
-    finally:
-        conn.close()
+    runtime = _source_runtime_context(request, source.id) if source else {}
     response = templates.TemplateResponse(
         request,
         "source_form.html",
@@ -483,11 +514,10 @@ def _source_form_response(
             user,
             _csrf_expected(request, user),
             {
-                "source": source,
+                **runtime,
+                "source": runtime.get("source", source),
                 "values": values,
                 "token_configured": bool(source and source.token_encrypted),
-                "runs": runs,
-                "artifacts": artifacts,
                 "error": error,
             },
         ),
@@ -495,6 +525,49 @@ def _source_form_response(
     )
     _attach_csrf(request, response, user)
     return response
+
+
+def _source_runtime_context(request: Request, source_id: int) -> dict:
+    conn = connect(_cfg(request))
+    try:
+        conn.execute("BEGIN")
+        source = get_source(conn, source_id)
+        if source is None:
+            return {}
+        return {
+            "source": source,
+            "runs": source_runs(conn, source_id),
+            "artifacts": source_artifacts(conn, source_id),
+        }
+    finally:
+        conn.close()
+
+
+def _source_runtime_response(request: Request, user: User, source_id: int, notice: str = ""):
+    runtime = _source_runtime_context(request, source_id)
+    if not runtime:
+        return HTMLResponse("软件来源不存在。", status_code=404)
+    response = templates.TemplateResponse(
+        request,
+        "source_runtime.html",
+        _flash_ctx(request, user, _csrf_expected(request, user), {**runtime, "sync_notice": notice}),
+        headers={"Cache-Control": "no-store"},
+    )
+    _attach_csrf(request, response, user)
+    return response
+
+
+@router.get("/sources/{source_id}/runtime", response_class=HTMLResponse)
+def source_runtime(request: Request, source_id: int):
+    user = current_user(request)
+    if user is None or user.must_change_password:
+        location = "/admin/login" if user is None else "/admin/password"
+        if request.headers.get("HX-Request") == "true":
+            return Response(status_code=204, headers={"HX-Redirect": location})
+        return RedirectResponse(location, status_code=303)
+    if request.headers.get("HX-Request") != "true":
+        return RedirectResponse(f"/admin/sources/{source_id}", status_code=303)
+    return _source_runtime_response(request, user, source_id)
 
 
 @router.get("/sources", response_class=HTMLResponse)
@@ -602,12 +675,17 @@ async def source_test(
     clear_token: Annotated[str, Form()] = "",
 ):
     user = current_user(request)
+    partial = request.headers.get("HX-Request") == "true"
     if user is None:
+        if partial:
+            return Response(status_code=204, headers={"HX-Redirect": "/admin/login"})
         return HTMLResponse("请先登录", status_code=401)
     cfg = _cfg(request)
     if not verify_csrf(request, cfg, csrf_token, _csrf_expected(request, user)):
         return HTMLResponse("CSRF 校验失败", status_code=403)
     if user.must_change_password:
+        if partial:
+            return Response(status_code=204, headers={"HX-Redirect": "/admin/password"})
         return HTMLResponse("请先修改初始密码", status_code=403)
     is_github = kind == "github_release"
     try:
@@ -755,22 +833,26 @@ async def source_sync_now(
     csrf_token: Annotated[str, Form()] = "",
 ):
     user = current_user(request)
-    if user is None:
-        return RedirectResponse("/admin/login", status_code=303)
+    partial = request.headers.get("HX-Request") == "true"
+    if user is None or user.must_change_password:
+        location = "/admin/login" if user is None else "/admin/password"
+        if partial:
+            return Response(status_code=204, headers={"HX-Redirect": location})
+        return RedirectResponse(location, status_code=303)
     cfg = _cfg(request)
     if not verify_csrf(request, cfg, csrf_token, _csrf_expected(request, user)):
         return HTMLResponse("CSRF 校验失败", status_code=403)
-    if user.must_change_password:
-        return RedirectResponse("/admin/password", status_code=303)
     conn = connect(cfg)
     try:
         queued = queue_source(conn, source_id)
     finally:
         conn.close()
-    if not queued:
-        return RedirectResponse(f"/admin/sources/{source_id}?err=disabled", status_code=303)
-    request.app.state.source_scheduler.wake()
-    return RedirectResponse(f"/admin/sources/{source_id}?queued=1", status_code=303)
+    if queued:
+        request.app.state.source_scheduler.wake()
+    if partial:
+        return _source_runtime_response(request, user, source_id, "queued" if queued else "unavailable")
+    query = "queued=1" if queued else "err=disabled"
+    return RedirectResponse(f"/admin/sources/{source_id}?{query}", status_code=303)
 
 
 @router.post("/sources/{source_id}/delete")
@@ -912,17 +994,30 @@ async def settings_post(
     return RedirectResponse("/admin/settings?saved=1", status_code=303)
 
 
-@router.get("/packages", response_class=HTMLResponse)
-def packages_list(request: Request, q: str = "", arch: str = ""):
-    user = current_user(request)
-    if user is None:
-        return RedirectResponse("/admin/login", status_code=303)
+def _packages_response(
+    request: Request,
+    user: User,
+    *,
+    q: str = "",
+    arch: str = "",
+    state: str = "",
+    page: int = 1,
+    status_code: int = 200,
+    upload_results: list[dict] | None = None,
+    upload_error: str | None = None,
+):
     cfg = _cfg(request)
+    if state not in ("active", "missing", "pending_delete"):
+        state = ""
     conn = connect(cfg)
     try:
-        rows = list_packages(conn, q=q or None, arch=arch or None)
+        conn.execute("BEGIN")
+        rows, total, page, pages = package_page(conn, q, arch, state, page, 50)
+        architectures = dict.fromkeys((*cfg.architectures, *sorted(package_architectures(conn))))
     finally:
         conn.close()
+    filters = {key: value for key, value in (("q", q), ("arch", arch), ("state", state)) if value}
+    page_prefix = "/admin/packages?" + (urlencode(filters) + "&" if filters else "")
     response = templates.TemplateResponse(
         request,
         "packages.html",
@@ -930,11 +1025,33 @@ def packages_list(request: Request, q: str = "", arch: str = ""):
             request,
             user,
             _csrf_expected(request, user),
-            {"packages": rows, "q": q, "arch": arch, "cfg": cfg},
+            {
+                "packages": rows,
+                "q": q,
+                "arch": arch,
+                "state": state,
+                "cfg": cfg,
+                "architectures": architectures,
+                "total": total,
+                "page": page,
+                "pages": pages,
+                "page_prefix": page_prefix,
+                "upload_results": upload_results,
+                "upload_error": upload_error,
+            },
         ),
+        status_code=status_code,
     )
     _attach_csrf(request, response, user)
     return response
+
+
+@router.get("/packages", response_class=HTMLResponse)
+def packages_list(request: Request, q: str = "", arch: str = "", state: str = "", page: str = "1"):
+    user = current_user(request)
+    if user is None:
+        return RedirectResponse("/admin/login", status_code=303)
+    return _packages_response(request, user, q=q, arch=arch, state=state, page=_parse_page(page))
 
 
 @router.post("/packages/delete")
@@ -942,6 +1059,10 @@ async def delete_packages(
     request: Request,
     csrf_token: Annotated[str, Form()] = "",
     package_ids: Annotated[list[int], Form()] = [],
+    q: Annotated[str, Form()] = "",
+    arch: Annotated[str, Form()] = "",
+    state: Annotated[str, Form()] = "",
+    page: Annotated[str, Form()] = "1",
 ):
     user = current_user(request)
     if user is None:
@@ -951,8 +1072,15 @@ async def delete_packages(
     cfg = _cfg(request)
     if not verify_csrf(request, cfg, csrf_token, _csrf_expected(request, user)):
         return HTMLResponse("CSRF 校验失败", status_code=403)
+    page_num = _parse_page(page)
+    filters = {key: value for key, value in (("q", q), ("arch", arch), ("state", state)) if value}
+    if page_num > 1:
+        filters["page"] = str(page_num)
+    suffix = "&" + urlencode(filters) if filters else ""
     if not package_ids:
-        return RedirectResponse("/admin/packages?err=" + quote("请先选择要删除的软件包"), status_code=303)
+        return RedirectResponse(
+            "/admin/packages?err=" + quote("请先选择要删除的软件包") + suffix, status_code=303
+        )
 
     def work():
         conn = connect(cfg)
@@ -962,9 +1090,8 @@ async def delete_packages(
             conn.close()
 
     result = await run_in_threadpool(work)
-    if not result.ok:
-        return RedirectResponse("/admin/packages?err=publish", status_code=303)
-    return RedirectResponse("/admin/packages?deleted=1", status_code=303)
+    query = "deleted=1" if result.ok else "err=publish"
+    return RedirectResponse(f"/admin/packages?{query}{suffix}", status_code=303)
 
 
 @router.get("/packages/{package_id}", response_class=HTMLResponse)
@@ -1039,7 +1166,9 @@ async def upload_packages(request: Request):
                     emit("upload_reject", reason=str(exc), filename=name)
                     return RedirectResponse("/admin/packages?err=" + quote(str(exc), safe=""), status_code=303)
                 except ValueError:
-                    return HTMLResponse("上传超过大小限制", status_code=413)
+                    return await run_in_threadpool(
+                        _packages_response, request, user, status_code=413, upload_error="上传超过大小限制。"
+                    )
                 incoming_paths.append(path)
                 total += parsed.size
                 items.append((parsed, path))
@@ -1053,16 +1182,29 @@ async def upload_packages(request: Request):
                 conn.close()
 
         results, pub = await run_in_threadpool(work)
-        if pub is not None and not pub.ok:
+        publish_failed = pub is not None and not pub.ok
+        saved_count = sum(1 for result in results if result["ok"])
+        if publish_failed and saved_count == len(results):
             return RedirectResponse("/admin/packages?err=upload_publish", status_code=303)
-        if any(not r["ok"] and r.get("error") == "duplicate" for r in results) and not any(
-            r["ok"] for r in results
-        ):
-            return RedirectResponse("/admin/packages?err=duplicate", status_code=409)
+        if saved_count != len(results) or any(not row.get("indexed", True) for row in results):
+            return await run_in_threadpool(
+                _packages_response,
+                request,
+                user,
+                status_code=200 if saved_count else 409,
+                upload_results=results,
+                upload_error="upload_publish" if publish_failed else None,
+            )
         return RedirectResponse("/admin/packages?ok=1", status_code=303)
     except DiskFullError:
-        return HTMLResponse("磁盘空间不足", status_code=507)
+        return await run_in_threadpool(
+            _packages_response, request, user, status_code=507, upload_error="磁盘空间不足。"
+        )
     except HTTPException as exc:
+        if exc.status_code == 413:
+            return await run_in_threadpool(
+                _packages_response, request, user, status_code=413, upload_error="上传超过大小限制。"
+            )
         if exc.status_code == 400 and str(exc.detail).startswith("Too many files."):
             return RedirectResponse("/admin/packages?err=too_many", status_code=303)
         raise

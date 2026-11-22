@@ -70,7 +70,10 @@ def test_publish_failure_is_visible_and_manual_retry_recovers(client, ready, tmp
     conn.close()
     assert client.get("/healthz").status_code == 200
     assert client.get("/readyz").status_code == 503
-    assert "test signing unavailable" in client.get("/admin/").text
+    dashboard = client.get("/admin/").text
+    assert "test signing unavailable" in dashboard
+    assert 'data-index-status="failed"' in dashboard
+    assert "APT 客户端暂时只能获取上次成功发布的索引" in dashboard
     response = client.post("/admin/publish", data={"csrf_token": token}, follow_redirects=False)
     assert response.headers["location"] == "/admin/?err=publish"
     monkeypatch.setattr(publishing, "sign_release", original_sign)
@@ -278,7 +281,7 @@ def test_health_ready_login_upload_inrelease(client, tmp_path: Path):
     assert "trusted=yes" not in joined
 
 
-def test_duplicate_http_rejected(client, tmp_path: Path):
+def test_duplicate_and_mixed_uploads_show_outcomes(client, tmp_path: Path):
     login(client)
     token = _csrf(client.get("/admin/packages").text)
     deb = build_deb(tmp_path / "dup_1.0-1_amd64.deb", package="duphttp", architecture="amd64")
@@ -299,9 +302,53 @@ def test_duplicate_http_rejected(client, tmp_path: Path):
         headers=ORIGIN_HEADERS,
         follow_redirects=False,
     )
-    assert second.status_code in {409, 303}
-    if second.status_code == 303:
-        assert "duplicate" in second.headers.get("location", "")
+    assert second.status_code == 409
+    assert "上传结果" in second.text
+    assert "版本已存在，已跳过" in second.text
+
+    new_deb = build_deb(tmp_path / "new.deb", package="new-upload", architecture="amd64")
+    mixed = client.post(
+        "/admin/packages/upload",
+        data={"csrf_token": token},
+        files=[*files, ("files", (new_deb.name, new_deb.read_bytes()))],
+        headers=ORIGIN_HEADERS,
+        follow_redirects=False,
+    )
+    assert mixed.status_code == 200
+    assert "版本已存在，已跳过" in mixed.text
+    assert 'badge badge-ok">已发布' in mixed.text
+    assert "Package: new-upload" in client.get("/apt/dists/stable/main/binary-amd64/Packages").text
+
+
+def test_packages_paginate_filtered_results(client, ready):
+    from prvaptmirror.db import connect
+
+    login(client)
+    conn = connect(ready)
+    try:
+        conn.executemany(
+            """
+            INSERT INTO packages (name, version, architecture, filename, size, md5, sha1,
+                                  sha256, control_json, state, uploaded_at)
+            VALUES (?, '1', 'arm64', ?, 4096, '', '', '', '{}', 'missing', '2026-01-01')
+            """,
+            [(f"page-test-{i:02}", f"pool/page-test-{i:02}.deb") for i in range(53)],
+        )
+    finally:
+        conn.close()
+    first = client.get("/admin/packages?q=page-test&arch=arm64&state=missing")
+    assert "共 53 个软件包 · 第 1 / 2 页" in first.text
+    assert first.text.count('name="package_ids"') == 50
+    assert "q=page-test&amp;arch=arm64&amp;state=missing&amp;page=2" in first.text
+    last = client.get("/admin/packages?q=page-test&arch=arm64&state=missing&page=8")
+    assert "第 2 / 2 页" in last.text
+    assert last.text.count('name="package_ids"') == 3
+    invalid_page = client.get("/admin/packages?q=page-test&arch=arm64&state=missing&page=abc")
+    assert invalid_page.status_code == 200
+    assert "第 1 / 2 页" in invalid_page.text
+    asset = re.search(r'href="(/admin/static/admin\.css\?v=[0-9a-f]{8})"', invalid_page.text)
+    assert asset
+    assert client.get(asset.group(1)).status_code == 200
 
 
 def test_delete_http_drops_from_index(client, tmp_path: Path):
@@ -334,9 +381,9 @@ def test_delete_http_drops_from_index(client, tmp_path: Path):
 def test_setup_snippet_no_trusted_yes(client):
     login(client)
     page = client.get("/admin/setup")
-    assert "在 Debian/Ubuntu 客户端配置此 APT 源" in page.text
-    assert "适用于 Debian 12+、Ubuntu 22.04+。" in page.text
-    assert "用于传统 <code>sources.list</code> 单行格式。" in page.text
+    assert "在 Debian 12+ 或 Ubuntu 22.04+ 客户端运行以下命令" in page.text
+    assert "兼容传统单行格式" in page.text
+    assert page.text.count("data-copy-command") == 2
     pres = re.findall(r"<pre>(.*?)</pre>", page.text, flags=re.S)
     text = "\n".join(pres).lower()
     assert "signed-by" in text
@@ -409,7 +456,7 @@ def test_source_configuration_ui_persists_in_database(client):
     assert "private-token" not in detail.text
     assert "已配置；留空则保持不变" in detail.text
     assert (
-        "GitHub 填写 <code>owner/repository</code>；HTTP 目录地址必须以 "
+        "GitHub 填写 <code>owner/repository</code>；HTTP 目录地址以 "
         "<code>/</code> 结尾。"
     ) in detail.text
     assert "保存后不再显示" in detail.text
@@ -427,7 +474,7 @@ def test_source_form_can_preview_github_asset_matches(client, monkeypatch):
 
     login(client)
     page = client.get("/admin/sources/new")
-    assert "测试获取与正则" in page.text
+    assert "预览可同步文件" in page.text
     assert 'hx-post="/admin/sources/test"' in page.text
 
     def fake_preview(location, asset_pattern, release_limit, **options):
@@ -537,6 +584,14 @@ def test_source_form_can_preview_http_directory_and_download_probe(client, monke
 
 
 def test_source_preview_shows_regex_validation_without_requesting_github(client):
+    anon_hx = client.post(
+        "/admin/sources/test",
+        data={"kind": "github_release", "location": "acme/tool"},
+        headers={**ORIGIN_HEADERS, "HX-Request": "true"},
+    )
+    assert anon_hx.status_code == 204
+    assert anon_hx.headers["HX-Redirect"] == "/admin/login"
+
     login(client)
     page = client.get("/admin/sources/new")
     response = client.post(
@@ -593,16 +648,32 @@ def test_source_manual_sync_is_queued_from_ui(client):
     conn = connect(client.app.state.base_cfg)
     source = get_source(conn, source_id)
     assert source is not None and source.last_status == "queued"
-    conn.close()
+    try:
+        hx = {**ORIGIN_HEADERS, "HX-Request": "true"}
+        queued = client.post(
+            f"/admin/sources/{source_id}/sync", data={"csrf_token": _csrf(detail.text)}, headers=hx
+        )
+        assert 'id="source-runtime"' in queued.text
+        assert 'hx-trigger="every 2s"' in queued.text
+        assert "已加入同步队列" in queued.text
+        assert "<!DOCTYPE html>" not in queued.text
+
+        conn.execute("UPDATE package_sources SET last_status = 'success' WHERE id = ?", (source_id,))
+        completed = client.get(f"/admin/sources/{source_id}/runtime", headers=hx)
+        assert '>成功</span>' in completed.text
+        assert 'hx-trigger="every 2s"' not in completed.text
+        assert "已加入同步队列" not in completed.text
+    finally:
+        conn.close()
 
 
-def test_settings_update_runtime_values_and_republish(client):
+def test_settings_update_runtime_values_and_republish(client, tmp_path):
     login(client)
     page = client.get("/admin/settings")
     assert page.status_code == 200
     assert "公开 URL" in page.text
     assert "用于生成客户端接入命令。" in page.text
-    assert "英文逗号分隔；移除后不再进入索引。" in page.text
+    assert "已保存的 <code>all</code> 包会进入各架构索引。" in page.text
     assert "会话期限只影响" not in page.text
     token = _csrf(page.text)
     values = {
@@ -628,6 +699,15 @@ def test_settings_update_runtime_values_and_republish(client):
     assert saved.status_code == 303, saved.text
     assert "https://apt.example.com/apt" in client.get("/admin/setup").text
     assert client.app.state.cfg.package_keep_versions == 2
+    deb = build_deb(tmp_path / "arch-independent.deb", package="arch-independent")
+    uploaded = client.post(
+        "/admin/packages/upload",
+        data={"csrf_token": token},
+        files={"files": (deb.name, deb.read_bytes())},
+        headers=ORIGIN_HEADERS,
+        follow_redirects=False,
+    )
+    assert uploaded.status_code == 303
 
     page = client.get("/admin/settings")
     values.update(
@@ -636,6 +716,7 @@ def test_settings_update_runtime_values_and_republish(client):
             "suite": "testing",
             "codename": "bookworm",
             "origin": "Private Repository",
+            "architectures": "amd64",
             "confirm_repository_change": "yes",
         }
     )
@@ -651,6 +732,11 @@ def test_settings_update_runtime_values_and_republish(client):
     assert "Suite: testing" in inrelease.text
     assert "Codename: bookworm" in inrelease.text
     assert "Origin: Private Repository" in inrelease.text
+    index = client.get("/apt/dists/testing/main/binary-amd64/Packages")
+    assert "Package: arch-independent" in index.text
+    dashboard = client.get("/admin/").text
+    assert 'data-index-status="current"' in dashboard
+    assert "因架构设置跳过" not in dashboard
 
 
 def test_settings_reject_repository_change_without_confirmation(client):

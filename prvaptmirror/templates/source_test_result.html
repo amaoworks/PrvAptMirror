@@ -1,15 +1,17 @@
 {% if not error and package_patterns %}
-  <div style="margin-top: 1rem;">
+  <div class="preview-controls">
     <p class="form-hint">勾选下表中需要同步的具体软件包，再生成正则并保存来源。</p>
-    <button type="button" class="btn-secondary" data-apply-packages>按所选软件包生成正则</button>
-    <span class="muted form-hint" data-package-feedback aria-live="polite"></span>
+    <div class="toolbar preview-actions">
+      <button type="button" class="btn-secondary" data-apply-packages>按所选软件包生成正则</button>
+      <span class="muted form-hint" data-package-feedback aria-live="polite"></span>
+    </div>
     <p class="muted form-hint">支持“包名_版本_架构.deb”和“包名-版本-平台.deb”，识别版本后自动匹配后续版本，包名和平台保持限定；无法识别版本时按完整文件名匹配。未选择软件包时不匹配任何文件。</p>
   </div>
 {% endif %}
 {% if error %}
-  <p class="err flash">{{ error }}</p>
+  <p class="err flash" role="alert">{{ error }}</p>
 {% elif preview.directory is defined %}
-  <p class="{{ 'ok' if preview.ready_count else 'err' }} flash">
+  <p class="{{ 'ok' if preview.ready_count else 'err' }} flash" role="{{ 'status' if preview.ready_count else 'alert' }}">
     已读取 HTTP 目录 <code>{{ preview.directory }}</code>；
     共看到 {{ preview.assets | length }} 个文件，选中 {{ preview.matched_count }} 个最新版，
     {{ preview.ready_count }} 个通过下载验证。
@@ -18,16 +20,16 @@
     <p class="muted form-hint">结果较多，页面仅显示前 200 个文件。</p>
   {% endif %}
   {% if preview.assets %}
-    <div class="table-responsive" style="margin-top: 0.75rem;">
+    <div class="table-responsive preview-table-wrap">
       <table>
         <thead>
           <tr>
-            <th><input type="checkbox" data-select-all-assets aria-label="全选软件包"></th>
-            <th>文件名</th>
-            <th>版本</th>
-            <th>架构</th>
-            <th>响应</th>
-            <th>测试结果</th>
+            <th scope="col"><input type="checkbox" data-select-all-assets aria-label="全选软件包"></th>
+            <th scope="col">文件名</th>
+            <th scope="col">版本</th>
+            <th scope="col">架构</th>
+            <th scope="col">响应</th>
+            <th scope="col">测试结果</th>
           </tr>
         </thead>
         <tbody>
@@ -40,14 +42,14 @@
             <td><code>{{ asset.architecture or "—" }}</code></td>
             <td>
               {% if asset.response_status %}HTTP {{ asset.response_status }}{% else %}—{% endif %}
-              {% if asset.content_type %}<br><span class="muted">{{ asset.content_type }}</span>{% endif %}
+              {% if asset.content_type %}<div class="cell-meta muted">{{ asset.content_type }}</div>{% endif %}
             </td>
             <td>
               {% if asset.selected and asset.valid_deb %}
                 <span class="badge badge-ok">最新版，可导入</span>
               {% elif asset.selected %}
                 <span class="badge badge-err">下载验证失败</span>
-                {% if asset.error %}<br><span class="err">{{ asset.error }}</span>{% endif %}
+                {% if asset.error %}<div class="cell-error err">{{ asset.error }}</div>{% endif %}
               {% elif not asset.is_deb %}
                 <span class="badge badge-mute">不是 .deb</span>
               {% elif not asset.pattern_matches %}
@@ -67,7 +69,7 @@
     <p class="muted form-hint">目录中没有可检查的文件链接。</p>
   {% endif %}
 {% else %}
-  <p class="{{ 'ok' if preview.matched_count else 'err' }} flash">
+  <p class="{{ 'ok' if preview.matched_count else 'err' }} flash" role="{{ 'status' if preview.matched_count else 'alert' }}">
     已读取 <code>{{ preview.repository }}</code> 的 {{ preview.releases_checked }} 个 Release；
     共看到 {{ preview.assets | length }} 个 Asset，{{ preview.matched_count }} 个将被抓取。
   </p>
@@ -75,15 +77,15 @@
     <p class="muted form-hint">结果较多，页面仅显示前 200 个 Asset。</p>
   {% endif %}
   {% if preview.assets %}
-    <div class="table-responsive" style="margin-top: 0.75rem;">
+    <div class="table-responsive preview-table-wrap">
       <table>
         <thead>
           <tr>
-            <th><input type="checkbox" data-select-all-assets aria-label="全选软件包"></th>
-            <th>Release</th>
-            <th>Asset 文件名</th>
-            <th>大小</th>
-            <th>测试结果</th>
+            <th scope="col"><input type="checkbox" data-select-all-assets aria-label="全选软件包"></th>
+            <th scope="col">Release</th>
+            <th scope="col">Asset 文件名</th>
+            <th scope="col" class="numeric">大小</th>
+            <th scope="col">测试结果</th>
           </tr>
         </thead>
         <tbody>
@@ -93,7 +95,7 @@
                 aria-label="选择 {{ asset.filename }}" {% if asset.pattern_matches %}checked{% endif %}>{% endif %}</td>
             <td><code>{{ asset.release }}</code></td>
             <td><code>{{ asset.filename or "（空文件名）" }}</code></td>
-            <td>{{ asset.size | humansize if asset.size is not none else "—" }}</td>
+            <td class="numeric">{{ asset.size | humansize if asset.size is not none else "—" }}</td>
             <td>
               {% if asset.selected %}
                 <span class="badge badge-ok">将抓取</span>
@@ -109,7 +111,7 @@
       </table>
     </div>
   {% elif preview.releases_checked == 0 %}
-    <p class="muted form-hint">没有符合当前“包含 prerelease”设置的 Release。</p>
+    <p class="muted form-hint">没有符合当前“包含预发布版本”设置的 Release。</p>
   {% else %}
     <p class="muted form-hint">所检查的 Release 没有 Asset。</p>
   {% endif %}

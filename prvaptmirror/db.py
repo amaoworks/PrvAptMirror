@@ -217,15 +217,9 @@ def get_user_by_id(conn: sqlite3.Connection, user_id: int) -> User | None:
     return user_from_row(row) if row else None
 
 
-def list_packages(
-    conn: sqlite3.Connection,
-    *,
-    q: str | None = None,
-    arch: str | None = None,
-    state: str | None = None,
-) -> list[PackageRow]:
-    sql = "SELECT * FROM packages WHERE 1=1"
-    params: list[object] = []
+def _package_filter(q: str | None, arch: str | None, state: str | None) -> tuple[str, list[str]]:
+    sql = " FROM packages WHERE 1=1"
+    params: list[str] = []
     if q:
         sql += " AND (name LIKE ? OR version LIKE ?)"
         like = f"%{q}%"
@@ -236,8 +230,45 @@ def list_packages(
     if state:
         sql += " AND state = ?"
         params.append(state)
-    sql += " ORDER BY name COLLATE NOCASE, version, architecture"
+    return sql, params
+
+
+_PACKAGE_ORDER = " ORDER BY name COLLATE NOCASE, name, version, architecture"
+
+
+def list_packages(
+    conn: sqlite3.Connection,
+    *,
+    q: str | None = None,
+    arch: str | None = None,
+    state: str | None = None,
+) -> list[PackageRow]:
+    where, params = _package_filter(q, arch, state)
+    sql = "SELECT *" + where + _PACKAGE_ORDER
     return [PackageRow.from_row(r) for r in conn.execute(sql, params)]
+
+
+def package_page(
+    conn: sqlite3.Connection, q: str, arch: str, state: str, page: int, page_size: int
+) -> tuple[list[PackageRow], int, int, int]:
+    where, params = _package_filter(q, arch, state)
+    total = conn.execute("SELECT count(*)" + where, params).fetchone()[0]
+    pages = max(1, (total + page_size - 1) // page_size)
+    page = min(max(1, page), pages)
+    sql = "SELECT *" + where + _PACKAGE_ORDER + " LIMIT ? OFFSET ?"
+    rows = conn.execute(sql, [*params, page_size, (page - 1) * page_size])
+    return [PackageRow.from_row(row) for row in rows], total, page, pages
+
+
+def package_inventory(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT architecture, state, count(*) AS count, sum(size) AS bytes "
+        "FROM packages GROUP BY architecture, state ORDER BY architecture"
+    ).fetchall()
+
+
+def package_architectures(conn: sqlite3.Connection) -> list[str]:
+    return [row[0] for row in conn.execute("SELECT DISTINCT architecture FROM packages")]
 
 
 def get_package(conn: sqlite3.Connection, package_id: int) -> PackageRow | None:

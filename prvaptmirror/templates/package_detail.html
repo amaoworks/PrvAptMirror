@@ -1,63 +1,64 @@
 {% extends "base.html" %}
 {% block title %}{{ pkg.name }} · PrvAptMirror{% endblock %}
 {% block body %}
-<div style="margin-bottom: 0.75rem;">
-  <a href="/admin/packages" style="color: var(--muted); text-decoration: none; font-size: 0.88rem;">← 返回软件包列表</a>
-</div>
+<a class="back-link" href="/admin/packages">← 返回软件包列表</a>
 <div class="page-title-row">
-  <h1>{{ pkg.name }} <span style="font-weight: 400; color: var(--muted);">{{ pkg.version }}</span> <span class="badge badge-mute" style="font-size: 0.85rem; vertical-align: middle;">{{ pkg.architecture }}</span></h1>
+  <h1 class="package-heading">
+    <span>{{ pkg.name }}</span>
+    <span class="package-version">{{ pkg.version }}</span>
+    <span class="badge badge-mute">{{ pkg.architecture }}</span>
+  </h1>
   <a class="btn" href="/admin/packages/{{ pkg.id }}/download">下载 .deb</a>
 </div>
 
-<div class="card">
-  <div class="panel" style="margin-bottom: 1.25rem;">
+<section class="card" aria-labelledby="pkg-info-heading">
+  <div class="panel package-meta-panel">
     <div class="kv">
-      <span class="k">状态：</span>
+      <span class="k">状态</span>
       <span class="v">
-        <span class="badge {% if pkg.state == 'active' %}badge-ok{% elif pkg.state == 'missing' %}badge-err{% else %}badge-mute{% endif %}">
+        <span class="badge {% if pkg.state == 'active' %}badge-ok{% elif pkg.state == 'missing' %}badge-err{% else %}badge-warn{% endif %}">
           {{ pkg.state | status_label }}
         </span>
       </span>
     </div>
     <div class="kv">
-      <span class="k">文件路径：</span>
+      <span class="k">文件路径</span>
       <span class="v"><code>{{ pkg.filename }}</code> · {{ pkg.size | humansize }}</span>
     </div>
     <div class="kv">
-      <span class="k">SHA256：</span>
+      <span class="k">SHA256</span>
       <span class="v"><code>{{ pkg.sha256 }}</code></span>
     </div>
   </div>
 
-  <h2>软件包信息</h2>
+  <h2 id="pkg-info-heading">软件包信息</h2>
   <div class="table-responsive">
-    <table>
+    <table class="control-table">
       <tbody>
       {% for k, v in control.items() %}
         <tr>
-          <th style="width: 160px; vertical-align: top; color: var(--muted); font-weight: 500;">{{ k }}</th>
-          <td><pre style="background:none;color:inherit;padding:0;margin:0;border:0;line-height:1.45;white-space:pre-wrap;">{{ v }}</pre></td>
+          <th scope="row">{{ k }}</th>
+          <td><pre class="control-value">{{ v }}</pre></td>
         </tr>
       {% endfor %}
       </tbody>
     </table>
   </div>
-</div>
+</section>
 
-<div class="card" style="border-color: rgba(155, 34, 38, 0.3);">
-  <h2 style="color: var(--danger);">危险操作：删除软件包</h2>
+<section class="card card-danger" aria-labelledby="pkg-delete-heading">
+  <h2 id="pkg-delete-heading">危险操作：删除软件包</h2>
   <p class="muted">输入包名 <strong>{{ pkg.name }}</strong> 确认删除。删除后将自动触发仓库索引重建。</p>
   {% if request.query_params.get("err") == "confirm" %}
-    <p class="err flash">确认包名不匹配。</p>
+    <p class="err flash" role="alert">确认包名不匹配。</p>
   {% endif %}
-  <form method="post" action="/admin/packages/{{ pkg.id }}/delete" style="margin-top: 0.85rem;">
+  <form method="post" action="/admin/packages/{{ pkg.id }}/delete" class="section-actions">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <label for="confirm_name">确认包名</label>
-    <div class="toolbar" style="margin-top: 0.4rem;">
-      <input id="confirm_name" name="confirm_name" type="text" style="max-width: 280px;" placeholder="输入 {{ pkg.name }}" required>
+    <div class="toolbar confirm-toolbar">
+      <input id="confirm_name" name="confirm_name" type="text" class="confirm-input" placeholder="输入 {{ pkg.name }}" required>
       <button class="danger" type="submit">确认删除并发布</button>
     </div>
   </form>
-</div>
+</section>
 {% endblock %}
-

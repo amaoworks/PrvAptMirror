@@ -169,6 +169,14 @@ def render_release(cfg: Config, staging_suite: Path, *, now: datetime | None = N
     return header.encode("utf-8")
 
 
+def package_index_architectures(architecture: str, architectures: tuple[str, ...]) -> tuple[str, ...]:
+    if architecture == "all":
+        return architectures
+    if architecture in architectures:
+        return (architecture,)
+    return ()
+
+
 def rebuild_dists(
     packages: list[PackageRow], staging_suite: Path, cfg: Config, *, now: datetime | None = None
 ) -> list[PackageRow]:
@@ -177,16 +185,11 @@ def rebuild_dists(
     for pkg in packages:
         if pkg.state != "active":
             continue
-        if pkg.architecture == "all":
-            if "all" in by_arch:
-                by_arch["all"].append(pkg)
-            for arch in cfg.architectures:
-                if arch != "all":
-                    by_arch[arch].append(pkg)
-        elif pkg.architecture in by_arch:
-            by_arch[pkg.architecture].append(pkg)
-        else:
+        targets = package_index_architectures(pkg.architecture, cfg.architectures)
+        if not targets:
             skipped.append(pkg)
+        for arch in targets:
+            by_arch[arch].append(pkg)
 
     for arch, rows in by_arch.items():
         dest = staging_suite / cfg.component / f"binary-{arch}"
